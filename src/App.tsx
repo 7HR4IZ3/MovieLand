@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { useMutation, useQuery } from "convex/react"
 import { Link, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import {
-  ArrowLeft, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, ExternalLink,
+  ArrowLeft, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, Download as DownloadIcon, ExternalLink,
   Film, Heart, Home, Info, MessageCircle, Pause, Play, Plus, Radio, RotateCcw, RotateCw, Search, Send, Server, Share2, Star,
-  Tv, Users, UsersRound, X,
+  Trash2, Tv, Users, UsersRound, X,
 } from "lucide-react"
 import { api } from "../convex/_generated/api"
 import type { Id } from "../convex/_generated/dataModel"
@@ -15,7 +15,7 @@ import { Input } from "./components/ui/input"
 import { Skeleton } from "./components/ui/skeleton"
 import { getBrowse, getDiscover, getGenreRails, getSeason, getTitle, searchCatalog } from "./lib/catalog"
 import { isConvexConfigured } from "./lib/convex"
-import { useMyList } from "./lib/local-state"
+import { useDownloads, useMyList, type DownloadItem } from "./lib/local-state"
 import { cn, formatRuntime, formatYear, tmdbImageUrl } from "./lib/utils"
 import { buildVideoEmbedUrl, requestProviderPlayback, requestProviderSeek, supportsProviderSeek, VIDEO_SERVERS, type VideoServer } from "./lib/video"
 import type { BrowseResponse, CatalogRail, GenreRailsResponse, MediaRecommendation, MediaTitle, Season } from "./lib/types"
@@ -41,6 +41,7 @@ function App() {
     <Route path="/" element={<DiscoverPage />} />
     <Route path="/search" element={<SearchPage />} />
     <Route path="/my-list" element={<MyListPage />} />
+    <Route path="/downloads" element={<DownloadsPage />} />
     <Route path="/watchparty" element={<WatchPartyPage />} />
     <Route path="/watchparty/:roomId" element={<WatchPartyRoomPage />} />
     <Route path="/browse/genre/:genreSlug" element={<BrowsePage />} />
@@ -70,11 +71,13 @@ function MobileTabBar() {
   const isDiscover = location.pathname === "/"
   const isSearch = location.pathname.startsWith("/search") || location.pathname.startsWith("/browse/")
   const isList = location.pathname.startsWith("/my-list")
+  const isDownloads = location.pathname.startsWith("/downloads")
   const isParty = location.pathname.startsWith("/watchparty")
   return <nav className="mobile-tab-bar" aria-label="Primary navigation">
     <Link className={cn("mobile-tab", isDiscover && "active")} to="/" aria-current={isDiscover ? "page" : undefined}><Home size={19} /><span>Home</span></Link>
     <Link className={cn("mobile-tab", isSearch && "active")} to="/search?q=" aria-current={isSearch ? "page" : undefined}><Search size={19} /><span>Search</span></Link>
     <Link className={cn("mobile-tab", isList && "active")} to="/my-list" aria-current={isList ? "page" : undefined}><Heart size={19} /><span>My list</span></Link>
+    <Link className={cn("mobile-tab", isDownloads && "active")} to="/downloads" aria-current={isDownloads ? "page" : undefined}><DownloadIcon size={19} /><span>Downloads</span></Link>
     <Link className={cn("mobile-tab", isParty && "active")} to="/watchparty" aria-current={isParty ? "page" : undefined}><Radio size={19} /><span>Party</span></Link>
   </nav>
 }
@@ -171,6 +174,33 @@ function SearchPage() {
   }, [query])
   function submit(event: FormEvent) { event.preventDefault(); navigate(`/search?q=${encodeURIComponent(input.trim())}`) }
   return <div className="mobile-page search-page"><div className="mobile-page-heading"><div><p className="page-kicker">Catalog</p><h1>Search</h1></div></div><form className="mobile-page-search" onSubmit={submit}><Search size={17} aria-hidden="true" /><Input aria-label="Search catalog" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Search movies, series, people…" /><Button type="submit" size="icon" aria-label="Submit search"><ArrowLeft size={17} /></Button></form>{query && <div className="results-summary"><h2>Results for “{query}”</h2><span>{items?.length ?? 0} titles</span></div>}{error && <InlineError message={error} onRetry={() => window.location.reload()} />}{!query ? <SearchPrompt /> : !items ? <PosterGridSkeleton /> : items.length ? <PosterGrid items={items} /> : <EmptyState title="No results" copy="Try another title, actor, or genre." action={<Link className={buttonVariants({ variant: "outline" })} to="/">Back to home</Link>} />}</div>
+}
+
+function DownloadsPage() {
+  const { items, clearDownloads, markOpened, removeDownload } = useDownloads()
+
+  function openDownload(item: DownloadItem) {
+    window.open(item.url, "_blank", "noopener,noreferrer")
+    markOpened(item.id)
+  }
+
+  function clearAll() {
+    if (window.confirm("Clear all saved download requests?")) clearDownloads()
+  }
+
+  return <div className="mobile-page downloads-page">
+    <div className="mobile-page-heading"><div><p className="page-kicker">Saved locally</p><h1>Downloads</h1></div><Badge variant="outline">{items.length}</Badge></div>
+    <p className="downloads-intro">MovieLand keeps download requests on this device. The provider still controls the actual file transfer.</p>
+    {!items.length ? <EmptyState title="No download requests" copy="Use Download on a watch page to save a provider link here." action={<Link className={buttonVariants({ variant: "outline" })} to="/">Browse titles</Link>} /> : <>
+      <div className="downloads-toolbar"><span>{items.length} saved {items.length === 1 ? "request" : "requests"}</span><Button variant="ghost" size="sm" onClick={clearAll}>Clear all</Button></div>
+      <section className="download-list" aria-label="Download requests">
+        {items.map((item) => <article className="download-item" key={item.id}>
+          <div className="download-item-copy"><strong>{item.title}</strong><span>{item.mediaType === "tv" ? `S${String(item.seasonNumber).padStart(2, "0")} · E${String(item.episodeNumber).padStart(2, "0")} · ${item.episodeName ?? "Episode"}` : "Movie"}</span><small>{item.server} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(item.createdAt)}</small></div>
+          <div className="download-item-actions"><Badge variant={item.status === "opened" ? "secondary" : "outline"}>{item.status === "opened" ? "Opened" : "Queued"}</Badge><Button variant="outline" size="sm" onClick={() => openDownload(item)}><DownloadIcon size={15} /> Open</Button><Button variant="ghost" size="icon" aria-label={`Remove ${item.title} download request`} onClick={() => removeDownload(item.id)}><Trash2 size={16} /></Button></div>
+        </article>)}
+      </section>
+    </>}
+  </div>
 }
 
 function MyListPage() {
@@ -276,25 +306,113 @@ function WatchPage({ mediaType }: { mediaType: "movie" | "tv" }) {
   const [season, setSeason] = useState<Season | null>(null)
   const [embedState, setEmbedState] = useState<"loading" | "ready" | "error">("loading")
   const [seekNotice, setSeekNotice] = useState("")
+  const [downloadNotice, setDownloadNotice] = useState("")
+  const [overlayVisible, setOverlayVisible] = useState(true)
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const overlayTimerRef = useRef<number | null>(null)
+  const lastTapRef = useRef<{ side: "left" | "right"; at: number } | null>(null)
+  const currentTimeRef = useRef(0)
+  const { addDownload, markOpened } = useDownloads()
   useEffect(() => { let live = true; getTitle(mediaType, id).then((result) => { if (live) setTitle(result ?? null) }).catch(() => undefined); return () => { live = false } }, [mediaType, id])
   useEffect(() => { if (mediaType !== "tv") return; let live = true; getSeason(id, seasonNumber).then((result) => { if (live) setSeason(result ?? null) }).catch(() => undefined); return () => { live = false } }, [id, mediaType, seasonNumber])
   const currentEpisode = season?.episodes.find((item) => item.episodeNumber === episodeNumber)
   const displayTitle = currentEpisode ? `${title?.title} · ${currentEpisode.name}` : title?.title ?? "MovieLand player"
   const embedUrl = buildVideoEmbedUrl({ server, title: { tmdbId: id, imdbId: title?.imdbId }, mediaType, seasonNumber, episodeNumber })
+
+  function revealOverlay() {
+    setOverlayVisible(true)
+    if (overlayTimerRef.current) window.clearTimeout(overlayTimerRef.current)
+    overlayTimerRef.current = window.setTimeout(() => setOverlayVisible(false), 3000)
+  }
+
+  useEffect(() => {
+    revealOverlay()
+    return () => { if (overlayTimerRef.current) window.clearTimeout(overlayTimerRef.current) }
+  }, [embedUrl])
+
+  useEffect(() => {
+    function handleProviderMessage(event: MessageEvent) {
+      if (event.source !== iframeRef.current?.contentWindow || typeof event.data !== "object" || !event.data) return
+      const nextTime = Number(event.data.currentTime ?? event.data.time ?? event.data.position ?? event.data.seconds)
+      if (Number.isFinite(nextTime) && nextTime >= 0) currentTimeRef.current = nextTime
+    }
+    window.addEventListener("message", handleProviderMessage)
+    return () => window.removeEventListener("message", handleProviderMessage)
+  }, [embedUrl])
+
   function seekBy(deltaSeconds: number) {
-    if (!requestProviderSeek(iframeRef.current, server, deltaSeconds)) return
-    const direction = deltaSeconds < 0 ? "Rewound" : "Forwarded"
-    setSeekNotice(`${direction} ${Math.abs(deltaSeconds)} seconds`)
+    if (!supportsProviderSeek(server)) {
+      setSeekNotice("Double-tap seek is available with VidLove")
+      window.setTimeout(() => setSeekNotice(""), 1800)
+      return
+    }
+    if (!requestProviderSeek(iframeRef.current, server, deltaSeconds, currentTimeRef.current)) {
+      setSeekNotice("Seek is not available yet")
+      window.setTimeout(() => setSeekNotice(""), 1800)
+      return
+    }
+    setSeekNotice(`Seek requested ${deltaSeconds < 0 ? "back" : "forward"} ${Math.abs(deltaSeconds)} seconds`)
     window.setTimeout(() => setSeekNotice(""), 1200)
   }
+
+  function handleTap(side: "left" | "right") {
+    revealOverlay()
+    const now = Date.now()
+    const previousTap = lastTapRef.current
+    if (previousTap?.side === side && now - previousTap.at < 320) {
+      lastTapRef.current = null
+      seekBy(side === "left" ? -10 : 10)
+      return
+    }
+    lastTapRef.current = { side, at: now }
+  }
+
+  function requestDownload() {
+    if (!embedUrl || !title) return
+    const item = addDownload({
+      tmdbId: id,
+      mediaType,
+      title: title.title,
+      seasonNumber: mediaType === "tv" ? seasonNumber : undefined,
+      episodeNumber: mediaType === "tv" ? episodeNumber : undefined,
+      episodeName: mediaType === "tv" ? currentEpisode?.name : undefined,
+      server: serverLabel,
+      url: embedUrl,
+    })
+    const popup = window.open(embedUrl, "_blank", "noopener,noreferrer")
+    if (popup) {
+      markOpened(item.id)
+      setDownloadNotice(`${serverLabel} download page opened`)
+    } else {
+      setDownloadNotice("Allow pop-ups to open the provider download page")
+    }
+    window.setTimeout(() => setDownloadNotice(""), 3000)
+  }
+
   function selectServer(nextServer: VideoServer) {
     const nextParams = new URLSearchParams(params)
     nextParams.set("server", nextServer)
     setParams(nextParams, { replace: true })
   }
   const serverLabel = VIDEO_SERVERS.find((option) => option.id === server)?.label ?? "VidLove"
-  return <div className="watch-page"><div className="player-topbar"><Link className="player-back" to={title ? `/${title.mediaType === "tv" ? "series" : "movie"}/${title.tmdbId}` : "/"}><ArrowLeft size={19} /><span>Back</span></Link><div className="player-title"><span>{mediaType === "tv" ? `S${String(seasonNumber).padStart(2, "0")} · E${String(episodeNumber).padStart(2, "0")}` : "Now watching"}</span><strong>{displayTitle}</strong></div><Link className="icon-button" aria-label="Close player" to="/"><X size={19} /></Link></div><div className="player-stage"><iframe ref={iframeRef} title={`${serverLabel} player for ${displayTitle}`} src={embedUrl ?? "about:blank"} allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setEmbedState("ready")} onError={() => setEmbedState("error")} />{supportsProviderSeek(server) && <div className="player-overlay-controls" aria-label="MovieLand playback controls"><button type="button" className="player-overlay-button" onClick={() => seekBy(-10)} aria-label="Rewind 10 seconds"><RotateCcw size={19} /><span>10</span></button><button type="button" className="player-overlay-button" onClick={() => seekBy(10)} aria-label="Forward 10 seconds"><RotateCw size={19} /><span>10</span></button></div>}<div className="embed-status" aria-live="polite">{seekNotice || (embedState === "loading" ? `Loading ${serverLabel}` : embedState === "error" ? `${serverLabel} player unavailable` : serverLabel)}</div></div><div className="watch-content">{mediaType === "tv" && title && <EpisodeBrowser title={title} season={season} seasonNumber={seasonNumber} episodeNumber={episodeNumber} server={server} watchMode />}<section className="server-panel"><div><p className="section-label">Playback</p><h2>Servers</h2></div><div className="server-options">{VIDEO_SERVERS.map((option) => <button className={cn("server-option", server === option.id && "selected")} key={option.id} type="button" aria-pressed={server === option.id} onClick={() => selectServer(option.id)}><Server size={16} /><span>{option.label}</span><Badge variant="outline">{server === option.id ? "Selected" : option.description}</Badge></button>)}</div></section><div className="watch-footer"><span><strong>Playing from {serverLabel}</strong><small>{server === "vidlove" ? "VidLove seek controls and provider download options are enabled." : "Provider controls are available inside the player."}</small></span><a className={buttonVariants({ variant: "outline", size: "sm" })} href={embedUrl ?? "https://player.vidlove.cc/"} target="_blank" rel="noreferrer">Open externally <ExternalLink size={14} /></a></div></div></div>
+  return <div className="watch-page">
+    <div className="player-topbar"><Link className="player-back" to={title ? `/${title.mediaType === "tv" ? "series" : "movie"}/${title.tmdbId}` : "/"}><ArrowLeft size={19} /><span>Back</span></Link><div className="player-title"><span>{mediaType === "tv" ? `S${String(seasonNumber).padStart(2, "0")} · E${String(episodeNumber).padStart(2, "0")}` : "Now watching"}</span><strong>{displayTitle}</strong></div><Link className="icon-button" aria-label="Close player" to="/"><X size={19} /></Link></div>
+    <div className="player-stage">
+      <iframe ref={iframeRef} title={`${serverLabel} player for ${displayTitle}`} src={embedUrl ?? "about:blank"} allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setEmbedState("ready")} onError={() => setEmbedState("error")} />
+      {supportsProviderSeek(server) && <>
+        <div className="player-gesture-layer" aria-label="Double-tap seek zones">
+          <button type="button" className="player-tap-zone player-tap-zone-left" aria-label="Double-tap left to rewind 10 seconds" onPointerUp={() => handleTap("left")} onClick={() => revealOverlay()} />
+          <button type="button" className="player-tap-zone player-tap-zone-right" aria-label="Double-tap right to forward 10 seconds" onPointerUp={() => handleTap("right")} onClick={() => revealOverlay()} />
+        </div>
+        <div className={cn("player-overlay-controls", !overlayVisible && "is-hidden")} aria-label="MovieLand playback controls">
+          <button type="button" className="player-overlay-button" onClick={() => { revealOverlay(); seekBy(-10) }} aria-label="Rewind 10 seconds"><RotateCcw size={19} /><span>10</span></button>
+          <button type="button" className="player-overlay-button" onClick={() => { revealOverlay(); seekBy(10) }} aria-label="Forward 10 seconds"><RotateCw size={19} /><span>10</span></button>
+        </div>
+      </>}
+      <div className="embed-status" aria-live="polite">{downloadNotice || seekNotice || (embedState === "loading" ? `Loading ${serverLabel}` : embedState === "error" ? `${serverLabel} player unavailable` : `${serverLabel} controls auto-hide after 3 seconds`)}</div>
+    </div>
+    <div className="watch-content">{mediaType === "tv" && title && <EpisodeBrowser title={title} season={season} seasonNumber={seasonNumber} episodeNumber={episodeNumber} server={server} watchMode />}<section className="server-panel"><div><p className="section-label">Playback</p><h2>Servers</h2></div><div className="server-options">{VIDEO_SERVERS.map((option) => <button className={cn("server-option", server === option.id && "selected")} key={option.id} type="button" aria-pressed={server === option.id} onClick={() => selectServer(option.id)}><Server size={16} /><span>{option.label}</span><Badge variant="outline">{server === option.id ? "Selected" : option.description}</Badge></button>)}</div></section><div className="watch-footer"><span><strong>Playing from {serverLabel}</strong><small>{server === "vidlove" ? "MovieLand seek controls auto-hide; the provider still owns its iframe controls." : "Provider controls are available inside the player."}</small></span><div className="watch-footer-actions"><Button variant="outline" size="sm" onClick={requestDownload} disabled={!embedUrl}><DownloadIcon size={15} /> Download</Button><a className={buttonVariants({ variant: "outline", size: "sm" })} href={embedUrl ?? "https://player.vidlove.cc/"} target="_blank" rel="noreferrer">Open externally <ExternalLink size={14} /></a></div></div></div>
+  </div>
 }
 
 function WatchPartyPage() {

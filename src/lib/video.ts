@@ -29,8 +29,10 @@ export function supportsProviderSeek(server: VideoServer) {
  * providers remain provider-controlled because their embeds do not publish a
  * compatible control API.
  */
-export function requestProviderSeek(iframe: HTMLIFrameElement | null, server: VideoServer, deltaSeconds: number) {
+export function requestProviderSeek(iframe: HTMLIFrameElement | null, server: VideoServer, deltaSeconds: number, currentTime = 0) {
   if (!iframe?.contentWindow || !supportsProviderSeek(server) || !Number.isFinite(deltaSeconds)) return false
+  const targetTime = Math.max(0, currentTime + deltaSeconds)
+  iframe.contentWindow.postMessage({ type: "SET_TIME", time: targetTime, currentTime: targetTime, source: "movieland-controls" }, VIDLOVE_ORIGIN)
   iframe.contentWindow.postMessage({ type: "seek", seekBy: deltaSeconds, source: "movieland-controls" }, VIDLOVE_ORIGIN)
   return true
 }
