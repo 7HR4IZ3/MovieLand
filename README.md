@@ -43,7 +43,19 @@ bunx cap add android
 bun run cap:sync
 ```
 
+The iOS platform is included in this repository. Open `ios/App/App.xcodeproj` in Xcode after syncing, select a simulator or signed device, and run the `App` scheme. A simulator build can also be validated without signing:
+
+```bash
+xcodebuild -project ios/App/App.xcodeproj -scheme App -sdk iphonesimulator -configuration Debug -derivedDataPath build/ios CODE_SIGNING_ALLOWED=NO build
+```
+
+The MovieLand app icon source lives at `resources/icon.png` and is expanded into the iOS asset catalog with `bunx @capacitor/assets generate --ios`.
+
 The iframe on the watch route is a dummy embed. Its surrounding transport controls demonstrate the VLC-inspired interface, but cross-origin iframe playback controls remain owned by the embedded provider.
+
+### Embedded player ads
+
+MovieLand cannot reliably remove advertisements from VidAPI, CDNM, or NontonGo iframes because they are cross-origin providers. The parent app cannot inspect or rewrite their DOM, and a generic network blocklist can break playback or miss server-side ads. The safe options are an official ad-free provider endpoint, a licensed playback provider, or an optional future native `WKContentRuleList` for known tracker hosts with clear user-facing limitations.
 
 ## Data and attribution
 
