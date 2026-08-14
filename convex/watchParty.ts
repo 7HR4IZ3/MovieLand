@@ -4,7 +4,7 @@ import { internal } from "./_generated/api"
 import type { Doc } from "./_generated/dataModel"
 
 const mediaType = v.union(v.literal("movie"), v.literal("tv"))
-const videoServer = v.union(v.literal("vidapi"), v.literal("cdnm"), v.literal("nontongo"))
+const videoServer = v.union(v.literal("vidlove"), v.literal("vidapi"), v.literal("cdnm"), v.literal("nontongo"))
 
 const roomSummary = v.object({
   roomId: v.id("watchPartyRooms"),

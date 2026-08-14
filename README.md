@@ -51,7 +51,7 @@ xcodebuild -project ios/App/App.xcodeproj -scheme App -sdk iphonesimulator -conf
 
 The MovieLand app icon source lives at `resources/icon.png` and is expanded into the iOS asset catalog with `bunx @capacitor/assets generate --ios`.
 
-The iframe on the watch route is a dummy embed. Its surrounding transport controls demonstrate the VLC-inspired interface, but cross-origin iframe playback controls remain owned by the embedded provider.
+The watch route defaults to VidLove's TMDB-ID embed (`https://player.vidlove.cc/embed/...`). VidLove's current embed seek bridge powers MovieLand's rewind/forward overlay buttons; the other cross-origin providers remain provider-controlled. VidLove's own download UI is enabled through its embed option and remains subject to the provider's terms and the content rights for your deployment.
 
 ### Embedded player ads
 

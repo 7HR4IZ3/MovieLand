@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "convex/react"
 import { Link, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import {
   ArrowLeft, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, ExternalLink,
-  Film, Heart, Home, Info, MessageCircle, Pause, Play, Plus, Radio, Search, Send, Server, Share2, Star,
+  Film, Heart, Home, Info, MessageCircle, Pause, Play, Plus, Radio, RotateCcw, RotateCw, Search, Send, Server, Share2, Star,
   Tv, Users, UsersRound, X,
 } from "lucide-react"
 import { api } from "../convex/_generated/api"
@@ -17,7 +17,7 @@ import { getBrowse, getDiscover, getGenreRails, getSeason, getTitle, searchCatal
 import { isConvexConfigured } from "./lib/convex"
 import { useMyList } from "./lib/local-state"
 import { cn, formatRuntime, formatYear, tmdbImageUrl } from "./lib/utils"
-import { buildVideoEmbedUrl, requestProviderPlayback, VIDEO_SERVERS, type VideoServer } from "./lib/video"
+import { buildVideoEmbedUrl, requestProviderPlayback, requestProviderSeek, supportsProviderSeek, VIDEO_SERVERS, type VideoServer } from "./lib/video"
 import type { BrowseResponse, CatalogRail, GenreRailsResponse, MediaRecommendation, MediaTitle, Season } from "./lib/types"
 import {
   createPartyHostToken,
@@ -283,22 +283,30 @@ function WatchPage({ mediaType }: { mediaType: "movie" | "tv" }) {
   const seasonNumber = positiveParam(params.get("season"), 1)
   const episodeNumber = positiveParam(params.get("episode"), 1)
   const serverParam = params.get("server")
-  const server: VideoServer = serverParam === "cdnm" || serverParam === "nontongo" ? serverParam : "vidapi"
+  const server: VideoServer = serverParam === "vidapi" || serverParam === "cdnm" || serverParam === "nontongo" ? serverParam : "vidlove"
   const [title, setTitle] = useState<MediaTitle | null>(null)
   const [season, setSeason] = useState<Season | null>(null)
   const [embedState, setEmbedState] = useState<"loading" | "ready" | "error">("loading")
+  const [seekNotice, setSeekNotice] = useState("")
+  const iframeRef = useRef<HTMLIFrameElement>(null)
   useEffect(() => { let live = true; getTitle(mediaType, id).then((result) => { if (live) setTitle(result ?? null) }).catch(() => undefined); return () => { live = false } }, [mediaType, id])
   useEffect(() => { if (mediaType !== "tv") return; let live = true; getSeason(id, seasonNumber).then((result) => { if (live) setSeason(result ?? null) }).catch(() => undefined); return () => { live = false } }, [id, mediaType, seasonNumber])
   const currentEpisode = season?.episodes.find((item) => item.episodeNumber === episodeNumber)
   const displayTitle = currentEpisode ? `${title?.title} · ${currentEpisode.name}` : title?.title ?? "MovieLand player"
   const embedUrl = buildVideoEmbedUrl({ server, title: { tmdbId: id, imdbId: title?.imdbId }, mediaType, seasonNumber, episodeNumber })
+  function seekBy(deltaSeconds: number) {
+    if (!requestProviderSeek(iframeRef.current, server, deltaSeconds)) return
+    const direction = deltaSeconds < 0 ? "Rewound" : "Forwarded"
+    setSeekNotice(`${direction} ${Math.abs(deltaSeconds)} seconds`)
+    window.setTimeout(() => setSeekNotice(""), 1200)
+  }
   function selectServer(nextServer: VideoServer) {
     const nextParams = new URLSearchParams(params)
     nextParams.set("server", nextServer)
     setParams(nextParams, { replace: true })
   }
-  const serverLabel = VIDEO_SERVERS.find((option) => option.id === server)?.label ?? "VidAPI"
-  return <div className="watch-page"><div className="player-topbar"><Link className="player-back" to={title ? `/${title.mediaType === "tv" ? "series" : "movie"}/${title.tmdbId}` : "/"}><ArrowLeft size={19} /><span>Back</span></Link><div className="player-title"><span>{mediaType === "tv" ? `S${String(seasonNumber).padStart(2, "0")} · E${String(episodeNumber).padStart(2, "0")}` : "Now watching"}</span><strong>{displayTitle}</strong></div><Link className="icon-button" aria-label="Close player" to="/"><X size={19} /></Link></div><div className="player-stage"><iframe title={`${serverLabel} player for ${displayTitle}`} src={embedUrl ?? "about:blank"} allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setEmbedState("ready")} onError={() => setEmbedState("error")} /><div className="embed-status" aria-live="polite">{embedState === "loading" ? `Loading ${serverLabel}` : embedState === "error" ? `${serverLabel} player unavailable` : serverLabel}</div></div><div className="watch-content">{mediaType === "tv" && title && <EpisodeBrowser title={title} season={season} seasonNumber={seasonNumber} episodeNumber={episodeNumber} server={server} watchMode />}<section className="server-panel"><div><p className="section-label">Playback</p><h2>Servers</h2></div><div className="server-options">{VIDEO_SERVERS.map((option) => <button className={cn("server-option", server === option.id && "selected")} key={option.id} type="button" aria-pressed={server === option.id} onClick={() => selectServer(option.id)}><Server size={16} /><span>{option.label}</span><Badge variant="outline">{server === option.id ? "Selected" : option.description}</Badge></button>)}</div></section><div className="watch-footer"><span><strong>Playing from {serverLabel}</strong><small>Provider controls are available inside the player.</small></span><a className={buttonVariants({ variant: "outline", size: "sm" })} href={embedUrl ?? "https://vidapi.xyz/"} target="_blank" rel="noreferrer">Open externally <ExternalLink size={14} /></a></div></div></div>
+  const serverLabel = VIDEO_SERVERS.find((option) => option.id === server)?.label ?? "VidLove"
+  return <div className="watch-page"><div className="player-topbar"><Link className="player-back" to={title ? `/${title.mediaType === "tv" ? "series" : "movie"}/${title.tmdbId}` : "/"}><ArrowLeft size={19} /><span>Back</span></Link><div className="player-title"><span>{mediaType === "tv" ? `S${String(seasonNumber).padStart(2, "0")} · E${String(episodeNumber).padStart(2, "0")}` : "Now watching"}</span><strong>{displayTitle}</strong></div><Link className="icon-button" aria-label="Close player" to="/"><X size={19} /></Link></div><div className="player-stage"><iframe ref={iframeRef} title={`${serverLabel} player for ${displayTitle}`} src={embedUrl ?? "about:blank"} allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setEmbedState("ready")} onError={() => setEmbedState("error")} />{supportsProviderSeek(server) && <div className="player-overlay-controls" aria-label="MovieLand playback controls"><button type="button" className="player-overlay-button" onClick={() => seekBy(-10)} aria-label="Rewind 10 seconds"><RotateCcw size={19} /><span>10</span></button><button type="button" className="player-overlay-button" onClick={() => seekBy(10)} aria-label="Forward 10 seconds"><RotateCw size={19} /><span>10</span></button></div>}<div className="embed-status" aria-live="polite">{seekNotice || (embedState === "loading" ? `Loading ${serverLabel}` : embedState === "error" ? `${serverLabel} player unavailable` : serverLabel)}</div></div><div className="watch-content">{mediaType === "tv" && title && <EpisodeBrowser title={title} season={season} seasonNumber={seasonNumber} episodeNumber={episodeNumber} server={server} watchMode />}<section className="server-panel"><div><p className="section-label">Playback</p><h2>Servers</h2></div><div className="server-options">{VIDEO_SERVERS.map((option) => <button className={cn("server-option", server === option.id && "selected")} key={option.id} type="button" aria-pressed={server === option.id} onClick={() => selectServer(option.id)}><Server size={16} /><span>{option.label}</span><Badge variant="outline">{server === option.id ? "Selected" : option.description}</Badge></button>)}</div></section><div className="watch-footer"><span><strong>Playing from {serverLabel}</strong><small>{server === "vidlove" ? "VidLove seek controls and provider download options are enabled." : "Provider controls are available inside the player."}</small></span><a className={buttonVariants({ variant: "outline", size: "sm" })} href={embedUrl ?? "https://player.vidlove.cc/"} target="_blank" rel="noreferrer">Open externally <ExternalLink size={14} /></a></div></div></div>
 }
 
 function WatchPartyPage() {
@@ -393,7 +401,7 @@ function LiveWatchPartyLobby() {
         mediaType: selectedTitle.mediaType,
         seasonNumber: selectedTitle.mediaType === "tv" ? seasonNumber : undefined,
         episodeNumber: selectedTitle.mediaType === "tv" ? episodeNumber : undefined,
-        server: "vidapi",
+        server: "vidlove",
         userId: identity.userId,
         username: nextIdentity.username,
         sessionId: getPartySessionId(),
