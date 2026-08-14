@@ -43,7 +43,7 @@ const recommendation = v.object({
   backdropPath: v.optional(v.string()),
 })
 
-const videoServer = v.union(v.literal("vidapi"), v.literal("cdnm"), v.literal("nontongo"))
+const videoServer = v.union(v.literal("vidlove"), v.literal("vidapi"), v.literal("cdnm"), v.literal("nontongo"))
 
 export default defineSchema({
   titles: defineTable({

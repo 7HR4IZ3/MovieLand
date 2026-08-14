@@ -3,8 +3,9 @@ import type { MediaTitle, MediaType } from "./types"
 const VID_API_ORIGIN = "https://vidapi.xyz"
 const CDNM_ORIGIN = "https://share.cdnm.ink"
 const NONTONGO_ORIGIN = "https://www.nontongo.win"
+const VIDLOVE_ORIGIN = "https://player.vidlove.cc"
 
-export type VideoServer = "vidapi" | "cdnm" | "nontongo"
+export type VideoServer = "vidlove" | "vidapi" | "cdnm" | "nontongo"
 
 export type ProviderPlaybackCommand = {
   action: "play" | "pause"
@@ -13,10 +14,26 @@ export type ProviderPlaybackCommand = {
 }
 
 export const VIDEO_SERVERS: Array<{ id: VideoServer; label: string; description: string }> = [
-  { id: "vidapi", label: "VidAPI", description: "Primary" },
+  { id: "vidlove", label: "VidLove", description: "Primary" },
+  { id: "vidapi", label: "VidAPI", description: "Alternative" },
   { id: "cdnm", label: "CDNM", description: "Alternative" },
   { id: "nontongo", label: "NontonGo", description: "Alternative" },
 ]
+
+export function supportsProviderSeek(server: VideoServer) {
+  return server === "vidlove"
+}
+
+/**
+ * VidLove's current embedded player accepts a seek postMessage bridge. Other
+ * providers remain provider-controlled because their embeds do not publish a
+ * compatible control API.
+ */
+export function requestProviderSeek(iframe: HTMLIFrameElement | null, server: VideoServer, deltaSeconds: number) {
+  if (!iframe?.contentWindow || !supportsProviderSeek(server) || !Number.isFinite(deltaSeconds)) return false
+  iframe.contentWindow.postMessage({ type: "seek", seekBy: deltaSeconds, source: "movieland-controls" }, VIDLOVE_ORIGIN)
+  return true
+}
 
 /**
  * Provider adapter boundary for cross-origin players. Current embeds do not
@@ -62,6 +79,33 @@ export function buildVidApiEmbedUrl({
   }
 
   return `${VID_API_ORIGIN}/embed/tv/${id}/${seasonNumber}/${episodeNumber}`
+}
+
+export function buildVidLoveEmbedUrl({
+  title,
+  mediaType,
+  seasonNumber,
+  episodeNumber,
+}: {
+  title: Pick<MediaTitle, "tmdbId" | "imdbId">
+  mediaType: MediaType
+  seasonNumber?: number
+  episodeNumber?: number
+}) {
+  const path = mediaType === "movie"
+    ? `/embed/movie/${encodeURIComponent(String(title.tmdbId))}`
+    : Number.isInteger(seasonNumber) && Number.isInteger(episodeNumber)
+      ? `/embed/tv/${encodeURIComponent(String(title.tmdbId))}/${seasonNumber}/${episodeNumber}`
+      : undefined
+
+  if (!path) return undefined
+
+  const url = new URL(`${VIDLOVE_ORIGIN}${path}`)
+  url.searchParams.set("primarycolor", "c98a3d")
+  url.searchParams.set("secondarycolor", "181c22")
+  url.searchParams.set("iconcolor", "ffffff")
+  url.searchParams.set("download", "true")
+  return url.toString()
 }
 
 export function buildCdnmEmbedUrl({
@@ -118,6 +162,7 @@ export function buildVideoEmbedUrl({
   seasonNumber?: number
   episodeNumber?: number
 }) {
+  if (server === "vidlove") return buildVidLoveEmbedUrl({ title, mediaType, seasonNumber, episodeNumber })
   if (server === "cdnm") return buildCdnmEmbedUrl({ title, mediaType, seasonNumber, episodeNumber })
   if (server === "nontongo") return buildNontonGoEmbedUrl({ title, mediaType, seasonNumber, episodeNumber })
   return buildVidApiEmbedUrl({ title, mediaType, seasonNumber, episodeNumber })
