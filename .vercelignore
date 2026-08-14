@@ -1,0 +1,10 @@
+build
+ios
+android
+dist
+node_modules
+.env*
+.vercel
+.agents
+.claude
+*.tsbuildinfo

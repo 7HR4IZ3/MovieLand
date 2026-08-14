@@ -57,22 +57,10 @@ function App() {
 }
 
 function Header() {
-  const location = useLocation()
-  const navigate = useNavigate()
-  const [query, setQuery] = useState(new URLSearchParams(location.search).get("q") ?? "")
-  const isSearch = location.pathname.startsWith("/search")
-
-  useEffect(() => setQuery(new URLSearchParams(location.search).get("q") ?? ""), [location.search])
-
-  function submit(event: FormEvent) {
-    event.preventDefault()
-    navigate(`/search?q=${encodeURIComponent(query.trim())}`)
-  }
-
   return <header className="mobile-header">
     <div className="mobile-header-row">
       <Link className="mobile-brand" to="/"><span className="brand-mark"><Film size={17} /></span><span>MovieLand</span></Link>
-      {isSearch ? <form className="mobile-header-search" onSubmit={submit} role="search"><Search size={16} aria-hidden="true" /><Input autoFocus aria-label="Search movies and series" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles…" /><button type="submit" aria-label="Search"><ArrowLeft size={16} /></button></form> : <Link className={buttonVariants({ variant: "ghost", size: "icon" })} to="/search?q=" aria-label="Search"><Search size={20} /></Link>}
+      <Link className={buttonVariants({ variant: "ghost", size: "icon" })} to="/search?q=" aria-label="Search"><Search size={20} /></Link>
     </div>
   </header>
 }
