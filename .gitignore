@@ -1,0 +1,16 @@
+node_modules
+dist
+.env
+.env.local
+.DS_Store
+.convex
+.agents
+.claude
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+capacitor.config.js
+capacitor.config.d.ts
+ios
+android
+.vercel
