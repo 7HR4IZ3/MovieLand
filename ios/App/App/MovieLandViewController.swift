@@ -66,7 +66,7 @@ private final class MovieLandNavigationDelegate: NSObject, WKNavigationDelegate 
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
-        guard shouldAllow(navigationAction.request.url, targetFrame: navigationAction.targetFrame) else {
+        guard shouldAllowAction(navigationAction.request.url, targetFrame: navigationAction.targetFrame) else {
             logBlocked(navigationAction.request.url)
             decisionHandler(.cancel)
             return
@@ -84,7 +84,7 @@ private final class MovieLandNavigationDelegate: NSObject, WKNavigationDelegate 
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
     ) {
-        guard shouldAllow(navigationResponse.response.url, targetFrame: nil) else {
+        guard shouldAllow(navigationResponse.response.url) else {
             logBlocked(navigationResponse.response.url)
             decisionHandler(.cancel)
             return
@@ -113,12 +113,15 @@ private final class MovieLandNavigationDelegate: NSObject, WKNavigationDelegate 
         return downstream
     }
 
-    private func shouldAllow(_ url: URL?, targetFrame: WKFrameInfo?) -> Bool {
-        guard let url else { return false }
-
+    private func shouldAllowAction(_ url: URL?, targetFrame: WKFrameInfo?) -> Bool {
         // A nil target frame means a new window/tab request, which is how
         // most embedded-player pop-ups and ad links attempt to escape.
         guard targetFrame != nil else { return false }
+        return shouldAllow(url)
+    }
+
+    private func shouldAllow(_ url: URL?) -> Bool {
+        guard let url else { return false }
 
         if url.isFileURL || url.scheme == "about" || url.scheme == "blob" || url.scheme == "data" {
             return true
