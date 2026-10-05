@@ -11,6 +11,8 @@ vite.config.js
 vite.config.d.ts
 capacitor.config.js
 capacitor.config.d.ts
+/api/ssr.js
+/api/ssr.d.ts
 android/local.properties
 android/keystore.properties
 android/app/*.jks
