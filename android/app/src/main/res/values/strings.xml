@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MovieLand</string>
+    <string name="title_activity_main">MovieLand</string>
+    <string name="package_name">com.movieland.app</string>
+    <string name="custom_url_scheme">com.movieland.app</string>
+    <string name="admob_app_id">ca-app-pub-1363043081820862~5659268746</string>
+</resources>

@@ -4,8 +4,10 @@ const VID_API_ORIGIN = "https://vidapi.xyz"
 const CDNM_ORIGIN = "https://share.cdnm.ink"
 const NONTONGO_ORIGIN = "https://www.nontongo.win"
 const VIDLOVE_ORIGIN = "https://player.vidlove.cc"
+const ONEONE_MOVIES_ORIGIN = "https://111movies.net"
+const VIDEASY_PLAYER_ORIGIN = "https://player.videasy.net"
 
-export type VideoServer = "vidlove" | "vidapi" | "cdnm" | "nontongo"
+export type VideoServer = "vidlove" | "vidapi" | "cdnm" | "nontongo" | "111movies" | "videasy"
 
 export type ProviderPlaybackCommand = {
   action: "play" | "pause"
@@ -18,7 +20,13 @@ export const VIDEO_SERVERS: Array<{ id: VideoServer; label: string; description:
   { id: "vidapi", label: "VidAPI", description: "Alternative" },
   { id: "cdnm", label: "CDNM", description: "Alternative" },
   { id: "nontongo", label: "NontonGo", description: "Alternative" },
+  { id: "111movies", label: "111Movies", description: "Alternative" },
+  { id: "videasy", label: "Videasy", description: "Alternative" },
 ]
+
+export function isVideoServer(value: string | null | undefined): value is VideoServer {
+  return value !== null && value !== undefined && VIDEO_SERVERS.some((option) => option.id === value)
+}
 
 /**
  * Provider adapter boundary for cross-origin players. Current embeds do not
@@ -89,8 +97,27 @@ export function buildVidLoveEmbedUrl({
   url.searchParams.set("primarycolor", "c98a3d")
   url.searchParams.set("secondarycolor", "181c22")
   url.searchParams.set("iconcolor", "ffffff")
+  // VidLove hides its own download panel unless this documented option is on.
+  // The provider still owns the actual source selection and transfer.
   url.searchParams.set("download", "true")
   return url.toString()
+}
+
+/**
+ * Embed providers expose player pages, not the underlying media file. Keep
+ * this adapter explicit so a provider can later return a direct file URL
+ * without making the download manager accidentally save HTML as a movie.
+ */
+export function directMediaUrlFromEmbed(embedUrl?: string) {
+  if (!embedUrl) return undefined
+  try {
+    const url = new URL(embedUrl)
+    const candidate = url.searchParams.get("downloadUrl") ?? url.searchParams.get("file")
+    if (!candidate || !/^https?:\/\//i.test(candidate)) return undefined
+    return candidate
+  } catch {
+    return undefined
+  }
 }
 
 export function buildCdnmEmbedUrl({
@@ -134,6 +161,47 @@ export function buildNontonGoEmbedUrl({
   return url.toString()
 }
 
+export function build111MoviesEmbedUrl({
+  title,
+  mediaType,
+  seasonNumber,
+  episodeNumber,
+}: {
+  title: Pick<MediaTitle, "tmdbId" | "imdbId">
+  mediaType: MediaType
+  seasonNumber?: number
+  episodeNumber?: number
+}) {
+  const provider = externalProvider(title)
+  if (mediaType === "movie") {
+    return `${ONEONE_MOVIES_ORIGIN}/movie/${encodeURIComponent(provider.id)}`
+  }
+
+  if (!Number.isInteger(seasonNumber) || !Number.isInteger(episodeNumber)) return undefined
+  return `${ONEONE_MOVIES_ORIGIN}/tv/${encodeURIComponent(provider.id)}/${seasonNumber}/${episodeNumber}`
+}
+
+export function buildVideasyEmbedUrl({
+  title,
+  mediaType,
+  seasonNumber,
+  episodeNumber,
+}: {
+  title: Pick<MediaTitle, "tmdbId" | "imdbId">
+  mediaType: MediaType
+  seasonNumber?: number
+  episodeNumber?: number
+}) {
+  // Videasy documents TMDB IDs for both movie and TV player URLs.
+  const id = encodeURIComponent(String(title.tmdbId))
+  if (mediaType === "movie") {
+    return `${VIDEASY_PLAYER_ORIGIN}/movie/${id}`
+  }
+
+  if (!Number.isInteger(seasonNumber) || !Number.isInteger(episodeNumber)) return undefined
+  return `${VIDEASY_PLAYER_ORIGIN}/tv/${id}/${seasonNumber}/${episodeNumber}`
+}
+
 export function buildVideoEmbedUrl({
   server,
   title,
@@ -150,5 +218,7 @@ export function buildVideoEmbedUrl({
   if (server === "vidlove") return buildVidLoveEmbedUrl({ title, mediaType, seasonNumber, episodeNumber })
   if (server === "cdnm") return buildCdnmEmbedUrl({ title, mediaType, seasonNumber, episodeNumber })
   if (server === "nontongo") return buildNontonGoEmbedUrl({ title, mediaType, seasonNumber, episodeNumber })
+  if (server === "111movies") return build111MoviesEmbedUrl({ title, mediaType, seasonNumber, episodeNumber })
+  if (server === "videasy") return buildVideasyEmbedUrl({ title, mediaType, seasonNumber, episodeNumber })
   return buildVidApiEmbedUrl({ title, mediaType, seasonNumber, episodeNumber })
 }

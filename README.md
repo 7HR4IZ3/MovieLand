@@ -11,6 +11,8 @@ bun run dev
 
 With no `VITE_CONVEX_URL`, the app uses the fixture catalog in `src/lib/fixtures.ts`.
 
+The web app is server-rendered by the Vite SSR server. Catalog pages load their data before HTML is sent, then React hydrates that HTML in the browser. SSR uses the existing public `VITE_CONVEX_URL`; the optional server-only `CONVEX_URL` overrides it. Fixture data is used when neither is configured. The static `bun run build:static` command is reserved for the Capacitor web bundle.
+
 ## Connect Convex and TMDB
 
 1. Create or select a Convex deployment and run `bunx convex dev` from this directory.
@@ -37,7 +39,7 @@ Convex code generation is performed by `bunx convex dev` or `bunx convex codegen
 Build the web bundle and synchronize it into native projects after adding a platform:
 
 ```bash
-bun run build
+bun run build:static
 bunx cap add ios
 bunx cap add android
 bun run cap:sync

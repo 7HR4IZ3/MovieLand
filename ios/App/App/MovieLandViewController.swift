@@ -12,6 +12,7 @@ final class MovieLandViewController: CAPBridgeViewController {
 
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
+        bridge?.registerPluginInstance(MovieLandDownloadPlugin.shared)
 
         guard let webView else { return }
 
@@ -24,6 +25,275 @@ final class MovieLandViewController: CAPBridgeViewController {
 
         navigationDelegateProxy = proxy
         webView.navigationDelegate = proxy
+    }
+}
+
+/// Native, resumable downloads for direct media URLs supplied by a provider
+/// adapter. Embed URLs are intentionally not accepted by the web layer as
+/// media sources because downloading them would only save the HTML player.
+@objc(MovieLandDownloadPlugin)
+final class MovieLandDownloadPlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDelegate {
+    static let shared = MovieLandDownloadPlugin()
+    static var backgroundEventsCompletion: (() -> Void)?
+
+    let identifier = "MovieLandDownloadPlugin"
+    let jsName = "MovieLandDownload"
+    let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "pause", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "resume", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "remove", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "list", returnType: CAPPluginReturnPromise),
+    ]
+
+    private struct Record: Codable {
+        var id: String
+        var url: String
+        var fileName: String
+        var status: String
+        var bytesDownloaded: Int64 = 0
+        var totalBytes: Int64 = 0
+        var speedBytesPerSecond: Double = 0
+        var localPath: String?
+        var error: String?
+        var resumeDataBase64: String?
+
+        var payload: [String: Any] {
+            var value: [String: Any] = [
+                "id": id,
+                "status": status,
+                "bytesDownloaded": Double(bytesDownloaded),
+                "totalBytes": Double(totalBytes),
+                "speedBytesPerSecond": speedBytesPerSecond,
+            ]
+            if let localPath { value["localPath"] = localPath }
+            if let error { value["error"] = error }
+            return value
+        }
+    }
+
+    private let storageKey = "movieland.native.downloads"
+    private var records: [String: Record] = [:]
+    private var tasks: [String: URLSessionDownloadTask] = [:]
+    private var lastProgressAt: [String: Date] = [:]
+    private var lastProgressBytes: [String: Int64] = [:]
+    private var reconnected = false
+
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.background(withIdentifier: "com.movieland.app.downloads")
+        configuration.isDiscretionary = false
+        configuration.sessionSendsLaunchEvents = true
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: OperationQueue.main)
+    }()
+
+    override func load() {
+        super.load()
+        reconnectDownloads()
+    }
+
+    func reconnectDownloads() {
+        guard !reconnected else { return }
+        reconnected = true
+        loadRecords()
+        session.getAllTasks { [weak self] activeTasks in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                for case let task as URLSessionDownloadTask in activeTasks {
+                    guard let id = task.taskDescription, self.records[id] != nil else { continue }
+                    self.tasks[id] = task
+                }
+            }
+        }
+    }
+
+    @objc func start(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), let urlString = call.getString("url"), let url = URL(string: urlString), let fileName = call.getString("fileName") else {
+            call.reject("A download id, URL, and file name are required")
+            return
+        }
+        guard url.scheme == "http" || url.scheme == "https" else {
+            call.reject("Only HTTP and HTTPS media URLs can be downloaded")
+            return
+        }
+
+        var record = records[id] ?? Record(id: id, url: urlString, fileName: fileName, status: "queued")
+        record.url = urlString
+        record.fileName = fileName
+        record.error = nil
+        records[id] = record
+        launch(id: id, call: call)
+    }
+
+    @objc func pause(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), let task = tasks[id] else {
+            call.reject("Download is not active")
+            return
+        }
+
+        task.cancel { [weak self] data in
+            DispatchQueue.main.async {
+                guard let self, var record = self.records[id] else {
+                    call.reject("Download no longer exists")
+                    return
+                }
+                self.tasks[id] = nil
+                if let data {
+                    record.resumeDataBase64 = data.base64EncodedString()
+                }
+                record.status = "paused"
+                record.speedBytesPerSecond = 0
+                self.records[id] = record
+                self.saveRecords()
+                self.emit(record)
+                call.resolve(record.payload)
+            }
+        }
+    }
+
+    @objc func resume(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), records[id] != nil else {
+            call.reject("Download no longer exists")
+            return
+        }
+        launch(id: id, call: call)
+    }
+
+    @objc func remove(_ call: CAPPluginCall) {
+        guard let id = call.getString("id") else {
+            call.reject("A download id is required")
+            return
+        }
+        tasks[id]?.cancel()
+        tasks[id] = nil
+        if let record = records[id], let path = record.localPath {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        records[id] = nil
+        saveRecords()
+        call.resolve()
+    }
+
+    @objc func list(_ call: CAPPluginCall) {
+        call.resolve(["items": records.values.map { $0.payload }])
+    }
+
+    private func launch(id: String, call: CAPPluginCall?) {
+        guard var record = records[id], let url = URL(string: record.url) else {
+            call?.reject("Download source is invalid")
+            return
+        }
+
+        tasks[id]?.cancel()
+        let task: URLSessionDownloadTask
+        if let base64 = record.resumeDataBase64, let data = Data(base64Encoded: base64) {
+            task = session.downloadTask(withResumeData: data)
+        } else {
+            task = session.downloadTask(with: URLRequest(url: url))
+        }
+        task.taskDescription = id
+        tasks[id] = task
+        record.status = "downloading"
+        record.error = nil
+        record.resumeDataBase64 = nil
+        records[id] = record
+        lastProgressAt[id] = Date()
+        lastProgressBytes[id] = record.bytesDownloaded
+        saveRecords()
+        emit(record)
+        task.resume()
+        call?.resolve(record.payload)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        guard let id = downloadTask.taskDescription, var record = records[id] else { return }
+        let now = Date()
+        let previousTime = lastProgressAt[id] ?? now
+        let previousBytes = lastProgressBytes[id] ?? totalBytesWritten
+        let elapsed = now.timeIntervalSince(previousTime)
+        record.bytesDownloaded = totalBytesWritten
+        record.totalBytes = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : 0
+        if elapsed > 0.05 {
+            record.speedBytesPerSecond = Double(max(0, totalBytesWritten - previousBytes)) / elapsed
+            lastProgressAt[id] = now
+            lastProgressBytes[id] = totalBytesWritten
+        }
+        record.status = "downloading"
+        records[id] = record
+        saveRecords()
+        emit(record)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        guard let id = downloadTask.taskDescription, var record = records[id] else { return }
+        guard let response = downloadTask.response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
+            record.status = "failed"
+            record.error = "The download server returned an unsuccessful HTTP response"
+            record.speedBytesPerSecond = 0
+            tasks[id] = nil
+            records[id] = record
+            saveRecords()
+            emit(record)
+            return
+        }
+        let destination = destinationURL(for: record)
+        do {
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: location, to: destination)
+            record.localPath = destination.path
+            record.status = "finished"
+            record.speedBytesPerSecond = 0
+            record.resumeDataBase64 = nil
+            if record.totalBytes > 0 { record.bytesDownloaded = record.totalBytes }
+            record.error = nil
+        } catch {
+            record.status = "failed"
+            record.error = error.localizedDescription
+        }
+        tasks[id] = nil
+        records[id] = record
+        saveRecords()
+        emit(record)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let id = task.taskDescription, var record = records[id], let error else { return }
+        if record.status == "paused" { return }
+        if let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+            record.resumeDataBase64 = resumeData.base64EncodedString()
+        }
+        record.status = "failed"
+        record.speedBytesPerSecond = 0
+        record.error = error.localizedDescription
+        tasks[id] = nil
+        records[id] = record
+        saveRecords()
+        emit(record)
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        MovieLandDownloadPlugin.backgroundEventsCompletion?()
+        MovieLandDownloadPlugin.backgroundEventsCompletion = nil
+    }
+
+    private func destinationURL(for record: Record) -> URL {
+        let safeName = record.fileName.replacingOccurrences(of: "/", with: "-")
+        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Downloads", isDirectory: true)
+        return directory.appendingPathComponent(safeName)
+    }
+
+    private func emit(_ record: Record) {
+        notifyListeners("downloadProgress", data: record.payload)
+    }
+
+    private func loadRecords() {
+        guard let data = UserDefaults.standard.data(forKey: storageKey), let saved = try? JSONDecoder().decode([Record].self, from: data) else { return }
+        records = Dictionary(uniqueKeysWithValues: saved.map { ($0.id, $0) })
+    }
+
+    private func saveRecords() {
+        guard let data = try? JSONEncoder().encode(Array(records.values)) else { return }
+        UserDefaults.standard.set(data, forKey: storageKey)
     }
 }
 
@@ -47,11 +317,16 @@ private final class MovieLandNavigationDelegate: NSObject, WKNavigationDelegate 
     private let appHost: String
 
     private let providerHosts = [
+        "player.vidlove.cc",
+        "vidlove.cc",
+        "www.vidlove.cc",
         "vidapi.xyz",
         "share.cdnm.ink",
         "cdnm.ink",
         "www.nontongo.win",
         "nontongo.win",
+        "111movies.net",
+        "videasy.net",
     ]
 
     init(downstream: WKNavigationDelegate?, appScheme: String, appHost: String) {

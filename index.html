@@ -4,11 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#14171c" />
-    <meta name="description" content="MovieLand — a focused place to discover what to watch next." />
-    <title>MovieLand</title>
+    <title>MovieLand</title><!--ssr-head-->
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><!--ssr-outlet--></div>
+    <script id="movieland-data" type="application/json">{}</script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

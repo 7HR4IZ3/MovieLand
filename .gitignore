@@ -11,6 +11,9 @@ vite.config.js
 vite.config.d.ts
 capacitor.config.js
 capacitor.config.d.ts
-android
+android/local.properties
+android/keystore.properties
+android/app/*.jks
+android/app/*.keystore
 build
 .vercel

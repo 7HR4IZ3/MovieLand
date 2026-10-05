@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { useMutation, useQuery } from "convex/react"
 import { Link, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import {
@@ -13,11 +13,17 @@ import { Button, buttonVariants } from "./components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card"
 import { Input } from "./components/ui/input"
 import { Skeleton } from "./components/ui/skeleton"
+import { AdMobBanner } from "./components/AdMobBanner"
+import { AdMobLifecycle } from "./components/AdMobLifecycle"
+import { AdMobNativeAdvanced } from "./components/AdMobNativeAdvanced"
 import { getBrowse, getDiscover, getGenreRails, getSeason, getTitle, searchCatalog } from "./lib/catalog"
+import type { ServerCatalogData } from "./lib/catalog-data"
 import { isConvexConfigured } from "./lib/convex"
 import { useDownloads, useMyList, type DownloadItem } from "./lib/local-state"
+import { isNativeDownloadAvailable, pauseNativeDownload, removeNativeDownload, resumeNativeDownload, startNativeDownload } from "./lib/native-download"
 import { cn, formatRuntime, formatYear, tmdbImageUrl } from "./lib/utils"
-import { buildVideoEmbedUrl, requestProviderPlayback, VIDEO_SERVERS, type VideoServer } from "./lib/video"
+import { buildVideoEmbedUrl, directMediaUrlFromEmbed, isVideoServer, requestProviderPlayback, VIDEO_SERVERS, type VideoServer } from "./lib/video"
+import { maybeShowMovieLandInterstitial } from "./lib/admob"
 import type { BrowseResponse, CatalogRail, GenreRailsResponse, MediaRecommendation, MediaTitle, Season } from "./lib/types"
 import {
   createPartyHostToken,
@@ -34,11 +40,55 @@ import {
 
 const fallbackBackdrop = "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1800&q=80"
 type PosterItem = MediaTitle | MediaRecommendation
+const CatalogDataContext = createContext<ServerCatalogData>({})
+
+export function AppWithCatalogData({ data }: { data: ServerCatalogData }) {
+  const location = useLocation()
+  const route = location.pathname + location.search
+  const initialRoute = useRef(route)
+  return <CatalogDataContext.Provider value={route === initialRoute.current ? data : {}}><App /></CatalogDataContext.Provider>
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "—"
+  const units = ["B", "KB", "MB", "GB"]
+  const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
+  return `${(value / (1024 ** index)).toFixed(index ? 1 : 0)} ${units[index]}`
+}
+
+function formatSpeed(value: number) {
+  return value > 0 ? `${formatBytes(value)}/s` : "Waiting for speed"
+}
+
+function LoadingIndicator({ label, compact = false }: { label: string; compact?: boolean }) {
+  return <span className={cn("loading-indicator", compact && "compact")} role="status" aria-live="polite"><span className="loading-spinner" aria-hidden="true" />{label}</span>
+}
+
+function LoadingButtonContent({ label }: { label: string }) {
+  return <span className="loading-button-content"><span className="loading-spinner small" aria-hidden="true" />{label}</span>
+}
+
+function downloadFileName(title: string, mediaType: "movie" | "tv", seasonNumber?: number, episodeNumber?: number) {
+  const suffix = mediaType === "tv" ? ` S${String(seasonNumber ?? 1).padStart(2, "0")}E${String(episodeNumber ?? 1).padStart(2, "0")}` : ""
+  return `${title}${suffix}.mp4`.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").trim()
+}
 
 function App() {
   const location = useLocation()
-  const routes = <Routes>
+  const previousPath = useRef<string | null>(null)
+  useEffect(() => {
+    const previous = previousPath.current
+    previousPath.current = location.pathname
+    if (!previous || previous === location.pathname) return
+    if (!/^\/(movie|series)\//.test(location.pathname)) return
+    const timer = window.setTimeout(() => {
+      void maybeShowMovieLandInterstitial()
+    }, 700)
+    return () => window.clearTimeout(timer)
+  }, [location.pathname])
+  const routes = <Routes key={location.pathname + location.search}>
     <Route path="/" element={<DiscoverPage />} />
+    <Route path="/privacy" element={<PrivacyPolicyPage />} />
     <Route path="/search" element={<SearchPage />} />
     <Route path="/my-list" element={<MyListPage />} />
     <Route path="/downloads" element={<DownloadsPage />} />
@@ -53,8 +103,8 @@ function App() {
     <Route path="*" element={<NotFound />} />
   </Routes>
 
-  if (location.pathname.startsWith("/watch/")) return <div className="mobile-player-shell">{routes}</div>
-  return <div className="mobile-app-shell"><Header /><main className="mobile-main">{routes}</main><MobileTabBar /><Footer /></div>
+  if (location.pathname.startsWith("/watch/")) return <><AdMobLifecycle /><div className="mobile-player-shell">{routes}</div></>
+  return <><AdMobLifecycle /><div className="mobile-app-shell"><Header /><main className="mobile-main">{routes}</main><MobileTabBar /><Footer /></div></>
 }
 
 function Header() {
@@ -83,41 +133,49 @@ function MobileTabBar() {
 }
 
 function DiscoverPage() {
-  const [state, setState] = useState<{ rails: CatalogRail[]; source: "tmdb" | "fixture" } | null>(null)
-  const [genreState, setGenreState] = useState<GenreRailsResponse | null>(null)
+  const serverData = useContext(CatalogDataContext)
+  const [state, setState] = useState<{ rails: CatalogRail[]; source: "tmdb" | "fixture" } | null>(serverData.discover ?? null)
+  const [genreState, setGenreState] = useState<GenreRailsResponse | null>(serverData.genres ?? null)
+  const [genreLoading, setGenreLoading] = useState(Boolean(serverData.discover && !serverData.genres))
   const [error, setError] = useState("")
   useEffect(() => {
+    if (serverData.discover) return
     let live = true
     getDiscover().then((result) => {
       if (!live) return
       setState(result)
-      getGenreRails().then((genres) => { if (live) setGenreState(genres) }).catch(() => undefined)
+      setGenreLoading(true)
+      getGenreRails().then((genres) => { if (live) setGenreState(genres) }).catch(() => undefined).finally(() => { if (live) setGenreLoading(false) })
     }).catch((reason) => { if (live) setError(String(reason)) })
     return () => { live = false }
-  }, [])
+  }, [serverData.discover])
   const featured = state?.rails[0]?.items[0]
   return <div className="mobile-page discovery-page" id="top">
-    <div className="mobile-page-heading"><div><p className="page-kicker">Home</p><h1>Discover</h1></div><Badge variant="outline">{state?.source === "fixture" ? "Offline" : "TMDB live"}</Badge></div>
     {error && <InlineError message={error} onRetry={() => window.location.reload()} />}
     {!state && !error ? <MobileDiscoverySkeleton /> : state && <>
       {featured && <FeaturedCard item={featured} />}
+      <AdMobBanner />
+      <AdMobNativeAdvanced />
       {state.rails.map((rail) => <MediaRail key={rail.key} rail={rail} />)}
+      {genreLoading && <GenreRailsSkeleton />}
       {genreState && <GenreRailsSection rails={genreState.rails} />}
     </>}
   </div>
 }
 
 function BrowsePage({ genreSlug }: { genreSlug?: string }) {
+  const serverData = useContext(CatalogDataContext)
   const { category = "", genreSlug: routeGenreSlug } = useParams()
   const [params, setParams] = useSearchParams()
   const resolvedGenreSlug = genreSlug ?? routeGenreSlug
   const browseCategory = resolvedGenreSlug ? `genre-${resolvedGenreSlug}` : category
   const requestedYear = positiveParam(params.get("year"), new Date().getFullYear())
-  const [state, setState] = useState<BrowseResponse | null>(null)
-  const [items, setItems] = useState<MediaTitle[]>([])
+  const [state, setState] = useState<BrowseResponse | null>(serverData.browse ?? null)
+  const [items, setItems] = useState<MediaTitle[]>(serverData.browse?.items ?? [])
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState("")
   useEffect(() => {
+    if (serverData.browse) return
     let live = true
     setState(null)
     setItems([])
@@ -128,7 +186,7 @@ function BrowsePage({ genreSlug }: { genreSlug?: string }) {
       setItems(result.items)
     }).catch((reason) => { if (live) setError(String(reason)) })
     return () => { live = false }
-  }, [browseCategory, resolvedGenreSlug, requestedYear])
+  }, [browseCategory, resolvedGenreSlug, requestedYear, serverData.browse])
   function changeYear(value: string) {
     const next = new URLSearchParams(params)
     next.set("year", value)
@@ -149,21 +207,25 @@ function BrowsePage({ genreSlug }: { genreSlug?: string }) {
   }
   const yearOptions = Array.from({ length: Math.max(1, new Date().getFullYear() - 1949) }, (_, index) => new Date().getFullYear() - index)
   const displayItems = state ? items : []
-  return <div className="mobile-page browse-page"><Link className="back-link" to="/"><ArrowLeft size={17} /> Back to discover</Link>{error && <InlineError message={error} onRetry={() => window.location.reload()} />}{!state && !error ? <PosterGridSkeleton /> : state && <><div className="mobile-page-heading"><div><p className="page-kicker">Browse</p><h1>{state.label}</h1></div><Badge variant="outline">{state.totalResults} titles</Badge></div>{browseCategory === "top-250-movies" && <label className="browse-filter"><span>Year</span><select value={requestedYear} onChange={(event) => changeYear(event.target.value)}>{yearOptions.map((year) => <option value={year} key={year}>{year}</option>)}</select><ChevronDown size={14} /></label>}{resolvedGenreSlug && <p className="browse-description">Movies and series tagged {params.get("name") ?? state.label}.</p>}<PosterGrid items={displayItems} />{state.page < state.totalPages && <Button className="load-more" variant="outline" onClick={loadMore} disabled={loadingMore}>{loadingMore ? "Loading…" : "Load more"}</Button>}</>}</div>
+  return <div className="mobile-page browse-page" aria-busy={!state && !error}><Link className="back-link" to="/"><ArrowLeft size={17} /> Back to discover</Link>{error && <InlineError message={error} onRetry={() => window.location.reload()} />}{!state && !error ? <PosterGridSkeleton /> : state && <><div className="mobile-page-heading"><div><p className="page-kicker">Browse</p><h1>{state.label}</h1></div><Badge variant="outline">{state.totalResults} titles</Badge></div>{browseCategory === "top-250-movies" && <label className="browse-filter"><span>Year</span><select value={requestedYear} onChange={(event) => changeYear(event.target.value)}>{yearOptions.map((year) => <option value={year} key={year}>{year}</option>)}</select><ChevronDown size={14} /></label>}{resolvedGenreSlug && <p className="browse-description">Movies and series tagged {params.get("name") ?? state.label}.</p>}<PosterGrid items={displayItems} />{state.page < state.totalPages && <Button className="load-more" variant="outline" onClick={loadMore} disabled={loadingMore}>{loadingMore ? <LoadingButtonContent label="Loading more…" /> : "Load more"}</Button>}</>}</div>
 }
 
 function FeaturedCard({ item }: { item: MediaTitle }) {
-  return <section className="featured-card" aria-label="Featured title"><img src={tmdbImageUrl(item.backdropPath, "w780") ?? fallbackBackdrop} alt="" /><div className="featured-copy"><div className="featured-copy-main"><Badge variant="secondary">Trending now</Badge><h2>{item.title}</h2><p><span>{item.mediaType === "tv" ? "Series" : "Movie"}</span><i>·</i><span>{formatYear(item.releaseDate)}</span><i>·</i><span className="rating"><Star size={12} fill="currentColor" /> {item.rating?.toFixed(1) ?? "—"}</span></p></div><Link className={buttonVariants({ size: "sm" })} to={`/${item.mediaType === "tv" ? "series" : "movie"}/${item.tmdbId}`}><Play size={15} fill="currentColor" /> Details</Link></div></section>
+  const detailPath = `/${item.mediaType === "tv" ? "series" : "movie"}/${item.tmdbId}`
+  const watchPath = item.mediaType === "tv" ? `/watch/series/${item.tmdbId}?season=1&episode=1` : `/watch/movie/${item.tmdbId}`
+  return <section className="featured-card" aria-label="Featured title"><img src={tmdbImageUrl(item.backdropPath, "w780") ?? fallbackBackdrop} alt={`${item.title} backdrop`} /><div className="featured-scrim" /><div className="featured-copy"><div className="featured-copy-main"><p className="featured-label">Trending now</p><h1>{item.title}</h1><p><span>{item.mediaType === "tv" ? "Series" : "Movie"}</span><i>·</i><span>{formatYear(item.releaseDate)}</span><i>·</i><span className="rating"><Star size={12} fill="currentColor" /> {item.rating?.toFixed(1) ?? "—"}</span></p><div className="featured-actions"><Link className={buttonVariants({ size: "sm" })} to={watchPath}><Play size={15} fill="currentColor" /> Play</Link><Link className={buttonVariants({ variant: "outline", size: "sm" })} to={detailPath}><Info size={15} /> Details</Link></div></div></div></section>
 }
 
 function SearchPage() {
+  const serverData = useContext(CatalogDataContext)
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const query = params.get("q")?.trim() ?? ""
   const [input, setInput] = useState(query)
-  const [items, setItems] = useState<MediaTitle[] | null>(null)
+  const [items, setItems] = useState<MediaTitle[] | null>(serverData.search?.items ?? null)
   const [error, setError] = useState("")
   useEffect(() => {
+    if (serverData.search) return
     setInput(query)
     if (!query) { setItems([]); return }
     let live = true
@@ -171,33 +233,69 @@ function SearchPage() {
     setError("")
     searchCatalog(query).then((result) => { if (live) setItems(result.items) }).catch((reason) => { if (live) setError(String(reason)) })
     return () => { live = false }
-  }, [query])
+  }, [query, serverData.search])
   function submit(event: FormEvent) { event.preventDefault(); navigate(`/search?q=${encodeURIComponent(input.trim())}`) }
-  return <div className="mobile-page search-page"><div className="mobile-page-heading"><div><p className="page-kicker">Catalog</p><h1>Search</h1></div></div><form className="mobile-page-search" onSubmit={submit}><Search size={17} aria-hidden="true" /><Input aria-label="Search catalog" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Search movies, series, people…" /><Button type="submit" size="icon" aria-label="Submit search"><ArrowLeft size={17} /></Button></form>{query && <div className="results-summary"><h2>Results for “{query}”</h2><span>{items?.length ?? 0} titles</span></div>}{error && <InlineError message={error} onRetry={() => window.location.reload()} />}{!query ? <SearchPrompt /> : !items ? <PosterGridSkeleton /> : items.length ? <PosterGrid items={items} /> : <EmptyState title="No results" copy="Try another title, actor, or genre." action={<Link className={buttonVariants({ variant: "outline" })} to="/">Back to home</Link>} />}</div>
+  return <div className="mobile-page search-page" aria-busy={Boolean(query && !items)}><div className="mobile-page-heading"><div><p className="page-kicker">Catalog</p><h1>Search</h1></div></div><form className="mobile-page-search" onSubmit={submit}><Search size={17} aria-hidden="true" /><Input aria-label="Search catalog" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Search movies, series, people…" /><Button type="submit" size="icon" aria-label="Submit search"><ArrowLeft size={17} /></Button></form>{query && <div className="results-summary"><h2>Results for “{query}”</h2><span>{items?.length ?? 0} titles</span></div>}{error && <InlineError message={error} onRetry={() => window.location.reload()} />}{!query ? <SearchPrompt /> : !items ? <PosterGridSkeleton /> : items.length ? <PosterGrid items={items} /> : <EmptyState title="No results" copy="Try another title, actor, or genre." action={<Link className={buttonVariants({ variant: "outline" })} to="/">Back to home</Link>} />}</div>
 }
 
 function DownloadsPage() {
-  const { items, clearDownloads, markOpened, removeDownload } = useDownloads()
+  const { items, clearDownloads, removeDownload, updateDownload } = useDownloads()
+  const [notice, setNotice] = useState("")
 
-  function openDownload(item: DownloadItem) {
-    window.open(item.url, "_blank", "noopener,noreferrer")
-    markOpened(item.id)
+  async function controlDownload(item: DownloadItem) {
+    if (item.sourceType !== "direct") {
+      setNotice("This provider only supplied an embed page; a direct media URL is required to start a file transfer.")
+      return
+    }
+    try {
+      if (item.status === "downloading") {
+        await pauseNativeDownload(item.id)
+      } else {
+        updateDownload(item.id, { status: "queued", error: undefined })
+        await (item.status === "paused" ? resumeNativeDownload(item.id) : startNativeDownload({ id: item.id, url: item.url, fileName: item.fileName ?? downloadFileName(item.title, item.mediaType, item.seasonNumber, item.episodeNumber) }))
+      }
+    } catch (reason) {
+      updateDownload(item.id, { status: "failed", error: reason instanceof Error ? reason.message : String(reason) })
+    }
   }
 
-  function clearAll() {
-    if (window.confirm("Clear all saved download requests?")) clearDownloads()
+  async function deleteDownload(item: DownloadItem) {
+    try {
+      await removeNativeDownload(item.id)
+      removeDownload(item.id)
+    } catch {
+      setNotice("Could not remove this download. Try again.")
+    }
+  }
+
+  async function clearAll() {
+    if (!window.confirm("Clear all downloads from this device?")) return
+    try {
+      await Promise.all(items.map((item) => removeNativeDownload(item.id)))
+      clearDownloads()
+    } catch {
+      setNotice("Could not clear all downloads. Try again.")
+    }
   }
 
   return <div className="mobile-page downloads-page">
-    <div className="mobile-page-heading"><div><p className="page-kicker">Saved locally</p><h1>Downloads</h1></div><Badge variant="outline">{items.length}</Badge></div>
-    <p className="downloads-intro">MovieLand keeps download requests on this device. The provider still controls the actual file transfer.</p>
-    {!items.length ? <EmptyState title="No download requests" copy="Use Download on a watch page to save a provider link here." action={<Link className={buttonVariants({ variant: "outline" })} to="/">Browse titles</Link>} /> : <>
-      <div className="downloads-toolbar"><span>{items.length} saved {items.length === 1 ? "request" : "requests"}</span><Button variant="ghost" size="sm" onClick={clearAll}>Clear all</Button></div>
-      <section className="download-list" aria-label="Download requests">
-        {items.map((item) => <article className="download-item" key={item.id}>
-          <div className="download-item-copy"><strong>{item.title}</strong><span>{item.mediaType === "tv" ? `S${String(item.seasonNumber).padStart(2, "0")} · E${String(item.episodeNumber).padStart(2, "0")} · ${item.episodeName ?? "Episode"}` : "Movie"}</span><small>{item.server} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(item.createdAt)}</small></div>
-          <div className="download-item-actions"><Badge variant={item.status === "opened" ? "secondary" : "outline"}>{item.status === "opened" ? "Opened" : "Queued"}</Badge><Button variant="outline" size="sm" onClick={() => openDownload(item)}><DownloadIcon size={15} /> Open</Button><Button variant="ghost" size="icon" aria-label={`Remove ${item.title} download request`} onClick={() => removeDownload(item.id)}><Trash2 size={16} /></Button></div>
-        </article>)}
+    <div className="mobile-page-heading"><div><p className="page-kicker">On this device</p><h1>Downloads</h1></div><Badge variant="outline">{items.length}</Badge></div>
+    <p className="downloads-intro">Direct media transfers run through the native download engine and can be paused, resumed, and continued from this screen.</p>
+    {notice && <p className="download-notice" role="status">{notice}</p>}
+    {!items.length ? <EmptyState title="No downloads yet" copy="Use Save to downloads on a watch page to add a file here." action={<Link className={buttonVariants({ variant: "outline" })} to="/">Browse titles</Link>} /> : <>
+      <div className="downloads-toolbar"><span>{items.length} {items.length === 1 ? "item" : "items"}</span><Button variant="ghost" size="sm" onClick={clearAll}>Clear all</Button></div>
+      <section className="download-list" aria-label="Downloads">
+        {items.map((item) => {
+          const progress = item.totalBytes > 0 ? Math.min(100, Math.round((item.bytesDownloaded / item.totalBytes) * 100)) : 0
+          const statusLabel = item.status === "waiting" ? "Waiting for file" : item.status === "completed" ? "Downloaded" : item.status === "downloading" ? "Downloading" : item.status === "paused" ? "Paused" : item.status === "failed" ? "Failed" : "Queued"
+          return <article className="download-item" key={item.id}>
+            <div className="download-item-main">
+              <div className="download-item-copy"><strong>{item.title}</strong><span>{item.mediaType === "tv" ? `S${String(item.seasonNumber).padStart(2, "0")} · E${String(item.episodeNumber).padStart(2, "0")} · ${item.episodeName ?? "Episode"}` : "Movie"}</span><small>{item.server} · {statusLabel}</small></div>
+              <div className="download-progress" aria-label={`${statusLabel} ${progress}%`}><div className="download-progress-track"><span style={{ width: `${progress}%` }} /></div><div className="download-progress-meta"><span>{item.totalBytes > 0 ? `${formatBytes(item.bytesDownloaded)} of ${formatBytes(item.totalBytes)}` : item.error ?? "Direct file source not available"}</span><span>{item.status === "downloading" ? formatSpeed(item.speedBytesPerSecond) : progress ? `${progress}%` : ""}</span></div></div>
+            </div>
+            <div className="download-item-actions">{item.status !== "waiting" && <Badge variant={item.status === "completed" ? "secondary" : "outline"}>{statusLabel}</Badge>}{(item.status === "downloading" || item.status === "paused" || item.status === "failed") && <Button variant="outline" size="sm" onClick={() => controlDownload(item)}>{item.status === "downloading" ? "Pause" : item.status === "paused" ? "Resume" : "Retry"}</Button>}<Button variant="ghost" size="icon" aria-label={`Remove ${item.title} download`} onClick={() => deleteDownload(item)}><Trash2 size={16} /></Button></div>
+          </article>
+        })}
       </section>
     </>}
   </div>
@@ -216,17 +314,19 @@ function MyListPage() {
 }
 
 function DetailPage({ mediaType }: { mediaType: "movie" | "tv" }) {
+  const serverData = useContext(CatalogDataContext)
   const { tmdbId } = useParams()
   const id = Number(tmdbId)
-  const [title, setTitle] = useState<MediaTitle | null>(null)
+  const [title, setTitle] = useState<MediaTitle | null>(serverData.title ?? null)
   const [error, setError] = useState("")
   useEffect(() => {
+    if (serverData.title?.tmdbId === id) return
     let live = true
     setTitle(null)
     setError("")
     getTitle(mediaType, id).then((result) => { if (live) setTitle(result ?? null) }).catch((reason) => { if (live) setError(String(reason)) })
     return () => { live = false }
-  }, [mediaType, id])
+  }, [mediaType, id, serverData.title])
   if (error) return <div className="mobile-page"><InlineError message={error} onRetry={() => window.location.reload()} /></div>
   if (!title) return <div className="mobile-page"><DetailSkeleton /></div>
   return <DetailContent title={title} />
@@ -237,21 +337,23 @@ function DetailContent({ title }: { title: MediaTitle }) {
   const firstSeason = title.seasons?.[0]?.seasonNumber ?? 1
   const [seasonNumber, setSeasonNumber] = useState(firstSeason)
   const [season, setSeason] = useState<Season | null>(null)
+  const [seasonLoading, setSeasonLoading] = useState(title.mediaType === "tv")
   useEffect(() => {
-    if (title.mediaType !== "tv") return
+    if (title.mediaType !== "tv") {
+      setSeasonLoading(false)
+      return
+    }
     let live = true
-    getSeason(title.tmdbId, seasonNumber).then((result) => { if (live) setSeason(result ?? null) }).catch(() => undefined)
+    setSeason(null)
+    setSeasonLoading(true)
+    getSeason(title.tmdbId, seasonNumber).then((result) => { if (live) setSeason(result ?? null) }).catch(() => undefined).finally(() => { if (live) setSeasonLoading(false) })
     return () => { live = false }
   }, [title.tmdbId, title.mediaType, seasonNumber])
   const firstEpisode = season?.episodes[0]?.episodeNumber ?? 1
   return <div className="mobile-page detail-page">
-    <Link className="back-link" to="/"><ArrowLeft size={17} /> Back to discover</Link>
-    <div className="detail-backdrop"><img src={tmdbImageUrl(title.backdropPath, "w780") ?? fallbackBackdrop} alt="" /><div /></div>
-    <div className="detail-hero detail-hero-overlap"><Poster item={title} size="large" /><div className="detail-title"><Badge variant="outline">{title.mediaType === "tv" ? "Series" : "Movie"}</Badge><h1>{title.title}</h1><div className="meta-line"><span>{formatYear(title.releaseDate)}</span><span>·</span><span>{title.mediaType === "tv" ? `${title.seasons?.length ?? 0} seasons` : formatRuntime(title.runtime)}</span><span>·</span><span className="rating"><Star size={12} fill="currentColor" /> {title.rating?.toFixed(1) ?? "—"}</span></div></div></div>
-    <div className="genre-list">{title.genres.map((genre) => <Badge variant="secondary" key={genre}>{genre}</Badge>)}</div>
-    <p className="detail-overview">{title.overview}</p>
-    <div className="action-row"><Link className={buttonVariants()} to={title.mediaType === "tv" ? `/watch/series/${title.tmdbId}?season=${seasonNumber}&episode=${firstEpisode}` : `/watch/movie/${title.tmdbId}`}><Play size={16} fill="currentColor" /> {title.mediaType === "tv" ? "Play series" : "Watch now"}</Link><Button variant="outline" className={cn(has(title.tmdbId) && "selected")} onClick={() => toggle(title.tmdbId, title.mediaType)}>{has(title.tmdbId) ? <Check size={16} /> : <Plus size={16} />} {has(title.tmdbId) ? "Saved" : "My list"}</Button></div>
-    {title.mediaType === "tv" && <EpisodeBrowser title={title} season={season} seasonNumber={seasonNumber} episodeNumber={firstEpisode} onSeasonChange={setSeasonNumber} />}
+    <div className="detail-visual"><img className="detail-backdrop-image" src={tmdbImageUrl(title.backdropPath, "w780") ?? fallbackBackdrop} alt={`${title.title} backdrop`} /><div className="detail-visual-scrim" /><Link className="detail-back-link" to="/"><ArrowLeft size={17} /> Back to discover</Link><div className="detail-hero"><Poster item={title} size="large" /><div className="detail-title"><p className="detail-type">{title.mediaType === "tv" ? "Series" : "Movie"}</p><h1>{title.title}</h1><div className="meta-line"><span>{formatYear(title.releaseDate)}</span><span>·</span><span>{title.mediaType === "tv" ? `${title.seasons?.length ?? 0} seasons` : formatRuntime(title.runtime)}</span><span>·</span><span className="rating"><Star size={12} fill="currentColor" /> {title.rating?.toFixed(1) ?? "—"}</span></div></div></div></div>
+    <div className="detail-body"><div className="genre-list">{title.genres.map((genre) => <span key={genre}>{genre}</span>)}</div><p className="detail-overview">{title.overview}</p><div className="action-row"><Link className={buttonVariants()} to={title.mediaType === "tv" ? `/watch/series/${title.tmdbId}?season=${seasonNumber}&episode=${firstEpisode}` : `/watch/movie/${title.tmdbId}`}><Play size={16} fill="currentColor" /> {title.mediaType === "tv" ? "Play series" : "Watch now"}</Link><Button variant="outline" className={cn(has(title.tmdbId) && "selected")} onClick={() => toggle(title.tmdbId, title.mediaType)}>{has(title.tmdbId) ? <Check size={16} /> : <Plus size={16} />} {has(title.tmdbId) ? "Saved" : "My list"}</Button></div></div>
+    {title.mediaType === "tv" && <EpisodeBrowser title={title} season={season} loading={seasonLoading} seasonNumber={seasonNumber} episodeNumber={firstEpisode} onSeasonChange={setSeasonNumber} />}
     <InfoGrid title={title} />
     <TrailerSection title={title} />
     <GallerySection title={title} />
@@ -281,7 +383,7 @@ function CreditsSection({ title }: { title: MediaTitle }) {
   return <section className="detail-section"><SectionHeading eyebrow="Cast" title="Top billed" count={`${title.credits.length}`} /><div className="credit-list credit-list-rich">{title.credits.slice(0, 8).map((credit) => <div className="credit-person" key={credit.id}>{credit.profilePath ? <img loading="lazy" src={tmdbImageUrl(credit.profilePath, "w342")} alt="" /> : <div className="credit-avatar"><Users size={16} /></div>}<strong>{credit.name}</strong><span>{credit.character ?? "Cast"}</span></div>)}</div></section>
 }
 
-function EpisodeBrowser({ title, season, seasonNumber, episodeNumber, onSeasonChange, server, watchMode = false }: { title: MediaTitle; season: Season | null; seasonNumber: number; episodeNumber: number; onSeasonChange?: (season: number) => void; server?: VideoServer; watchMode?: boolean }) {
+function EpisodeBrowser({ title, season, loading = false, seasonNumber, episodeNumber, onSeasonChange, server, watchMode = false }: { title: MediaTitle; season: Season | null; loading?: boolean; seasonNumber: number; episodeNumber: number; onSeasonChange?: (season: number) => void; server?: VideoServer; watchMode?: boolean }) {
   const navigate = useNavigate()
   const [showAll, setShowAll] = useState(false)
   const episodePath = (nextSeason: number, nextEpisode: number) => `/watch/series/${title.tmdbId}?season=${nextSeason}&episode=${nextEpisode}${server ? `&server=${server}` : ""}`
@@ -291,7 +393,7 @@ function EpisodeBrowser({ title, season, seasonNumber, episodeNumber, onSeasonCh
     else onSeasonChange?.(nextSeason)
   }
   const visibleEpisodes = season ? (showAll ? season.episodes : season.episodes.slice(0, 10)) : []
-  return <section className={cn("detail-section episodes-section", watchMode && "watch-episodes")}><SectionHeading eyebrow="Series" title="Episodes" count={season ? `${season.episodes.length} episodes` : undefined} /><div className="episode-toolbar"><label className="select-wrap"><span>Season</span><select value={seasonNumber} onChange={(event) => changeSeason(Number(event.target.value))}>{title.seasons?.map((item) => <option key={item.seasonNumber} value={item.seasonNumber}>{item.name}</option>)}</select><ChevronDown size={14} /></label>{season?.overview && <p>{season.overview}</p>}</div>{!season ? <div className="episode-loading">Loading episodes…</div> : <><div className="episode-list">{visibleEpisodes.map((item) => { const isCurrent = episodeNumber === item.episodeNumber; return <Link className={cn("episode-row", isCurrent && "selected")} key={item.id} to={episodePath(seasonNumber, item.episodeNumber)}><span className="episode-number">{String(item.episodeNumber).padStart(2, "0")}</span>{item.stillPath ? <img className="episode-thumb" loading="lazy" src={tmdbImageUrl(item.stillPath, "w342")} alt="" /> : <div className="episode-thumb episode-thumb-empty"><Play size={14} /></div>}<span className="episode-info"><strong>{item.name}</strong><span>{item.overview}</span>{isCurrent && <em className="episode-current">Playing now</em>}</span><span className="episode-runtime">{formatRuntime(item.runtime)}</span><ChevronRight size={17} /></Link> })}</div>{season.episodes.length > 10 && <button className="episodes-toggle" type="button" aria-expanded={showAll} onClick={() => setShowAll((current) => !current)}>{showAll ? "Show fewer episodes" : `View all ${season.episodes.length} episodes`}</button>}</>}</section>
+  return <section className={cn("detail-section episodes-section", watchMode && "watch-episodes")} aria-busy={loading}><SectionHeading eyebrow="Series" title="Episodes" count={season ? `${season.episodes.length} episodes` : undefined} /><div className="episode-toolbar"><label className="select-wrap"><span>Season</span><select value={seasonNumber} onChange={(event) => changeSeason(Number(event.target.value))} disabled={loading}>{title.seasons?.map((item) => <option key={item.seasonNumber} value={item.seasonNumber}>{item.name}</option>)}</select><ChevronDown size={14} /></label>{season?.overview && <p>{season.overview}</p>}</div>{loading ? <EpisodeListSkeleton /> : !season ? <div className="episode-loading">Episodes are unavailable right now.</div> : <><div className="episode-list">{visibleEpisodes.map((item) => { const isCurrent = episodeNumber === item.episodeNumber; return <Link className={cn("episode-row", isCurrent && "selected")} key={item.id} to={episodePath(seasonNumber, item.episodeNumber)}><span className="episode-number">{String(item.episodeNumber).padStart(2, "0")}</span>{item.stillPath ? <img className="episode-thumb" loading="lazy" src={tmdbImageUrl(item.stillPath, "w342")} alt="" /> : <div className="episode-thumb episode-thumb-empty"><Play size={14} /></div>}<span className="episode-info"><strong>{item.name}</strong><span>{item.overview}</span>{isCurrent && <em className="episode-current">Playing now</em>}</span><span className="episode-runtime">{formatRuntime(item.runtime)}</span><ChevronRight size={17} /></Link> })}</div>{season.episodes.length > 10 && <button className="episodes-toggle" type="button" aria-expanded={showAll} onClick={() => setShowAll((current) => !current)}>{showAll ? "Show fewer episodes" : `View all ${season.episodes.length} episodes`}</button>}</>}</section>
 }
 
 function WatchPage({ mediaType }: { mediaType: "movie" | "tv" }) {
@@ -301,18 +403,47 @@ function WatchPage({ mediaType }: { mediaType: "movie" | "tv" }) {
   const seasonNumber = positiveParam(params.get("season"), 1)
   const episodeNumber = positiveParam(params.get("episode"), 1)
   const serverParam = params.get("server")
-  const server: VideoServer = serverParam === "vidapi" || serverParam === "cdnm" || serverParam === "nontongo" ? serverParam : "vidlove"
+  const server: VideoServer = isVideoServer(serverParam) ? serverParam : "vidlove"
   const [title, setTitle] = useState<MediaTitle | null>(null)
   const [season, setSeason] = useState<Season | null>(null)
+  const [seasonLoading, setSeasonLoading] = useState(mediaType === "tv")
+  const [playerLoading, setPlayerLoading] = useState(true)
+  const playerLoadId = useRef(0)
+  const playerLoadStartedAt = useRef(Date.now())
   const [downloadNotice, setDownloadNotice] = useState("")
-  const { addDownload, markOpened } = useDownloads()
+  const { addDownload, updateDownload } = useDownloads()
   useEffect(() => { let live = true; getTitle(mediaType, id).then((result) => { if (live) setTitle(result ?? null) }).catch(() => undefined); return () => { live = false } }, [mediaType, id])
-  useEffect(() => { if (mediaType !== "tv") return; let live = true; getSeason(id, seasonNumber).then((result) => { if (live) setSeason(result ?? null) }).catch(() => undefined); return () => { live = false } }, [id, mediaType, seasonNumber])
+  useEffect(() => {
+    if (mediaType !== "tv") {
+      setSeasonLoading(false)
+      return
+    }
+    let live = true
+    setSeason(null)
+    setSeasonLoading(true)
+    getSeason(id, seasonNumber).then((result) => { if (live) setSeason(result ?? null) }).catch(() => undefined).finally(() => { if (live) setSeasonLoading(false) })
+    return () => { live = false }
+  }, [id, mediaType, seasonNumber])
   const currentEpisode = season?.episodes.find((item) => item.episodeNumber === episodeNumber)
   const displayTitle = currentEpisode ? `${title?.title} · ${currentEpisode.name}` : title?.title ?? "MovieLand player"
   const embedUrl = buildVideoEmbedUrl({ server, title: { tmdbId: id, imdbId: title?.imdbId }, mediaType, seasonNumber, episodeNumber })
+  const directUrl = directMediaUrlFromEmbed(embedUrl)
+  const fileName = downloadFileName(title?.title ?? "MovieLand download", mediaType, seasonNumber, episodeNumber)
+  useEffect(() => {
+    playerLoadId.current += 1
+    playerLoadStartedAt.current = Date.now()
+    setPlayerLoading(true)
+  }, [embedUrl])
 
-  function requestDownload() {
+  function handlePlayerLoad() {
+    const loadId = playerLoadId.current
+    const remaining = Math.max(0, 320 - (Date.now() - playerLoadStartedAt.current))
+    window.setTimeout(() => {
+      if (playerLoadId.current === loadId) setPlayerLoading(false)
+    }, remaining)
+  }
+
+  async function requestDownload() {
     if (!embedUrl || !title) return
     const item = addDownload({
       tmdbId: id,
@@ -322,14 +453,27 @@ function WatchPage({ mediaType }: { mediaType: "movie" | "tv" }) {
       episodeNumber: mediaType === "tv" ? episodeNumber : undefined,
       episodeName: mediaType === "tv" ? currentEpisode?.name : undefined,
       server: serverLabel,
-      url: embedUrl,
+      url: directUrl ?? embedUrl,
+      fileName,
+      sourceType: directUrl ? "direct" : "embed",
     })
-    const popup = window.open(embedUrl, "_blank", "noopener,noreferrer")
-    if (popup) {
-      markOpened(item.id)
-      setDownloadNotice(`${serverLabel} download page opened`)
-    } else {
-      setDownloadNotice("Allow pop-ups to open the provider download page")
+    if (!directUrl) {
+      updateDownload(item.id, { status: "waiting", error: "This provider returned an embed page, not a direct media file." })
+      setDownloadNotice("Saved to Downloads — this provider does not expose a direct file URL")
+      return
+    }
+    if (!isNativeDownloadAvailable) {
+      updateDownload(item.id, { status: "failed", error: "Native downloads are available in the iOS app." })
+      setDownloadNotice("Native downloads are available in the iOS app")
+      return
+    }
+    try {
+      await startNativeDownload({ id: item.id, url: directUrl, fileName })
+      updateDownload(item.id, { status: "downloading", error: undefined })
+      setDownloadNotice("Download started")
+    } catch (reason) {
+      updateDownload(item.id, { status: "failed", error: reason instanceof Error ? reason.message : String(reason) })
+      setDownloadNotice("Download could not start")
     }
     window.setTimeout(() => setDownloadNotice(""), 3000)
   }
@@ -341,11 +485,17 @@ function WatchPage({ mediaType }: { mediaType: "movie" | "tv" }) {
   }
   const serverLabel = VIDEO_SERVERS.find((option) => option.id === server)?.label ?? "VidLove"
   return <div className="watch-page">
-    <div className="player-topbar"><Link className="player-back" to={title ? `/${title.mediaType === "tv" ? "series" : "movie"}/${title.tmdbId}` : "/"}><ArrowLeft size={19} /><span>Back</span></Link><div className="player-title"><span>{mediaType === "tv" ? `S${String(seasonNumber).padStart(2, "0")} · E${String(episodeNumber).padStart(2, "0")}` : "Now watching"}</span><strong>{displayTitle}</strong></div><Link className="icon-button" aria-label="Close player" to="/"><X size={19} /></Link></div>
-    <div className="player-stage">
-      <iframe title={`${serverLabel} player for ${displayTitle}`} src={embedUrl ?? "about:blank"} allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
+    <div className="player-stage" aria-busy={playerLoading}>
+      <div className="player-stage-actions"><Link className="player-stage-action" aria-label="Back to details" to={title ? `/${title.mediaType === "tv" ? "series" : "movie"}/${title.tmdbId}` : "/"}><ArrowLeft size={18} /></Link><Link className="player-stage-action" aria-label="Close player" to="/"><X size={18} /></Link></div>
+      <iframe key={embedUrl ?? "empty-player"} title={`${serverLabel} player for ${displayTitle}`} src={embedUrl ?? "about:blank"} allow="fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={handlePlayerLoad} />
+      {playerLoading && <div className="player-loading-overlay"><LoadingIndicator label={`Loading ${serverLabel} player…`} /></div>}
     </div>
-    <div className="watch-content">{mediaType === "tv" && title && <EpisodeBrowser title={title} season={season} seasonNumber={seasonNumber} episodeNumber={episodeNumber} server={server} watchMode />}<section className="server-panel"><div><p className="section-label">Playback</p><h2>Servers</h2></div><div className="server-options">{VIDEO_SERVERS.map((option) => <button className={cn("server-option", server === option.id && "selected")} key={option.id} type="button" aria-pressed={server === option.id} onClick={() => selectServer(option.id)}><Server size={16} /><span>{option.label}</span><Badge variant="outline">{server === option.id ? "Selected" : option.description}</Badge></button>)}</div></section><div className="watch-footer"><span><strong>Playing from {serverLabel}</strong><small>{server === "vidlove" ? "VidLove's native player controls are active." : "Provider controls are available inside the player."}</small>{downloadNotice && <small className="watch-feedback" aria-live="polite">{downloadNotice}</small>}</span><div className="watch-footer-actions"><Button variant="outline" size="sm" onClick={requestDownload} disabled={!embedUrl}><DownloadIcon size={15} /> Download</Button><a className={buttonVariants({ variant: "outline", size: "sm" })} href={embedUrl ?? "https://player.vidlove.cc/"} target="_blank" rel="noreferrer">Open externally <ExternalLink size={14} /></a></div></div></div>
+    <div className="watch-content">
+      <div className="watch-identity"><div><p className="watch-identity-kicker">{mediaType === "tv" ? `S${String(seasonNumber).padStart(2, "0")} · E${String(episodeNumber).padStart(2, "0")}` : "Movie"} · {serverLabel}</p><h1>{displayTitle}</h1></div>{title && <Link className="watch-details-link" to={`/${title.mediaType === "tv" ? "series" : "movie"}/${title.tmdbId}`}><Info size={14} /> Details</Link>}</div>
+      {mediaType === "tv" && title && <EpisodeBrowser title={title} season={season} loading={seasonLoading} seasonNumber={seasonNumber} episodeNumber={episodeNumber} server={server} watchMode />}
+      <section className="server-panel" aria-busy={playerLoading}><div><p className="section-label">Playback source</p><h2>Servers</h2>{playerLoading && <LoadingIndicator compact label={`Switching to ${serverLabel}…`} />}</div><div className="server-options">{VIDEO_SERVERS.map((option) => <button className={cn("server-option", server === option.id && "selected")} key={option.id} type="button" aria-pressed={server === option.id} onClick={() => selectServer(option.id)}><Server size={16} /><span>{option.label}</span>{server === option.id && playerLoading ? <LoadingIndicator compact label="Loading" /> : <Badge variant="outline">{server === option.id ? "Selected" : option.description}</Badge>}</button>)}</div></section>
+      <div className="watch-footer"><div className="watch-status"><span className="watch-status-dot" aria-hidden="true" /><span><strong>{serverLabel} player</strong><small>Playback controls stay inside the provider iframe.</small>{downloadNotice && <small className="watch-feedback" aria-live="polite">{downloadNotice}</small>}</span></div><div className="watch-footer-actions"><Button variant="outline" size="sm" onClick={requestDownload} disabled={!embedUrl}><DownloadIcon size={15} /> Save to downloads</Button><a className={buttonVariants({ variant: "outline", size: "sm" })} href={embedUrl ?? "https://player.vidlove.cc/"} target="_blank" rel="noreferrer">Open source <ExternalLink size={14} /></a></div></div>
+    </div>
   </div>
 }
 
@@ -367,6 +517,7 @@ function LiveWatchPartyLobby() {
   const [results, setResults] = useState<MediaTitle[]>([])
   const [selectedTitle, setSelectedTitle] = useState<MediaTitle | null>(null)
   const [season, setSeason] = useState<Season | null>(null)
+  const [seasonLoading, setSeasonLoading] = useState(false)
   const [seasonNumber, setSeasonNumber] = useState(1)
   const [episodeNumber, setEpisodeNumber] = useState(1)
   const [joinInput, setJoinInput] = useState("")
@@ -377,6 +528,7 @@ function LiveWatchPartyLobby() {
   useEffect(() => {
     if (!selectedTitle || selectedTitle.mediaType !== "tv") {
       setSeason(null)
+      setSeasonLoading(false)
       setSeasonNumber(1)
       setEpisodeNumber(1)
       return
@@ -388,11 +540,13 @@ function LiveWatchPartyLobby() {
   useEffect(() => {
     if (!selectedTitle || selectedTitle.mediaType !== "tv") return
     let live = true
+    setSeason(null)
+    setSeasonLoading(true)
     getSeason(selectedTitle.tmdbId, seasonNumber).then((result) => {
       if (!live) return
       setSeason(result ?? null)
       setEpisodeNumber(result?.episodes[0]?.episodeNumber ?? 1)
-    }).catch(() => { if (live) setSeason(null) })
+    }).catch(() => { if (live) setSeason(null) }).finally(() => { if (live) setSeasonLoading(false) })
     return () => { live = false }
   }, [selectedTitle, seasonNumber])
 
@@ -463,7 +617,7 @@ function LiveWatchPartyLobby() {
   }
 
   const selectedEpisode = season?.episodes.find((item) => item.episodeNumber === episodeNumber)
-  return <div className="mobile-page watchparty-page"><div className="mobile-page-heading"><div><p className="page-kicker">Together</p><h1>Watchparty</h1></div><Badge variant="outline"><UsersRound size={13} /> Realtime</Badge></div><p className="watchparty-intro">Create a private room, share the link, and watch with a synchronized room state.</p>{error && <InlineError message={error} onRetry={() => setError("")} />}<Card className="party-card"><CardHeader><CardTitle><UsersRound size={18} /> Your temporary identity</CardTitle></CardHeader><CardContent><label className="party-field"><span>Username</span><Input value={usernameInput} onChange={(event) => setUsernameInput(event.target.value)} maxLength={32} placeholder="Guest" /></label><div className="party-identity-id">userid <code>{identity.userId.slice(0, 12)}…</code><span>stored on this device</span></div><Button variant="outline" onClick={saveIdentity}>Save identity</Button></CardContent></Card><Card className="party-card"><CardHeader><CardTitle><Search size={18} /> Choose something to watch</CardTitle></CardHeader><CardContent><form className="party-search-form" onSubmit={submitSearch}><Input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Search TMDB…" aria-label="Search TMDB catalog" /><Button type="submit" disabled={loadingSearch}>{loadingSearch ? "Searching…" : "Search"}</Button></form>{results.length > 0 && <div className="party-search-results">{results.map((item) => <button className={cn("party-media-option", selectedTitle?.tmdbId === item.tmdbId && selectedTitle.mediaType === item.mediaType && "selected")} type="button" key={`${item.mediaType}-${item.tmdbId}`} onClick={() => setSelectedTitle(item)}><Poster item={item} /><span><strong>{item.title}</strong><small>{item.mediaType === "tv" ? "Series" : "Movie"} · {formatYear(item.releaseDate)}</small></span><Check size={16} /></button>)}</div>}{selectedTitle && <div className="party-selection"><Poster item={selectedTitle} /><div><p className="section-label">Selected title</p><strong>{selectedTitle.title}</strong><span>{selectedTitle.mediaType === "tv" ? "Series" : "Movie"} · {formatYear(selectedTitle.releaseDate)}</span></div></div>}{selectedTitle?.mediaType === "tv" && <div className="party-episode-selectors"><label className="party-field"><span>Season</span><select value={seasonNumber} onChange={(event) => setSeasonNumber(Number(event.target.value))}>{selectedTitle.seasons?.map((item) => <option value={item.seasonNumber} key={item.seasonNumber}>{item.name}</option>)}</select></label><label className="party-field"><span>Episode</span><select value={episodeNumber} onChange={(event) => setEpisodeNumber(Number(event.target.value))}>{season?.episodes.map((item) => <option value={item.episodeNumber} key={item.episodeNumber}>{String(item.episodeNumber).padStart(2, "0")} · {item.name}</option>)}</select></label></div>}{selectedEpisode && <p className="party-selection-note">Starting with episode {String(selectedEpisode.episodeNumber).padStart(2, "0")} · {selectedEpisode.name}</p>}<Button className="party-create-button" onClick={handleCreateRoom} disabled={!selectedTitle || creating}><Radio size={16} /> {creating ? "Creating room…" : "Create room"}</Button></CardContent></Card><Card className="party-card"><CardHeader><CardTitle><MessageCircle size={18} /> Join a room</CardTitle></CardHeader><CardContent><form className="party-search-form" onSubmit={handleJoin}><Input value={joinInput} onChange={(event) => setJoinInput(event.target.value)} placeholder="Paste a room link or room id" aria-label="Room link or room id" /><Button type="submit" variant="outline">Join</Button></form><p className="party-help">Your saved temporary identity will be used when you join.</p></CardContent></Card></div>
+  return <div className="mobile-page watchparty-page"><div className="mobile-page-heading"><div><p className="page-kicker">Together</p><h1>Watchparty</h1></div><Badge variant="outline"><UsersRound size={13} /> Realtime</Badge></div><p className="watchparty-intro">Create a private room, share the link, and watch with a synchronized room state.</p>{error && <InlineError message={error} onRetry={() => setError("")} />}<Card className="party-card"><CardHeader><CardTitle><UsersRound size={18} /> Your temporary identity</CardTitle></CardHeader><CardContent><label className="party-field"><span>Username</span><Input value={usernameInput} onChange={(event) => setUsernameInput(event.target.value)} maxLength={32} placeholder="Guest" /></label><div className="party-identity-id">userid <code>{identity.userId.slice(0, 12)}…</code><span>stored on this device</span></div><Button variant="outline" onClick={saveIdentity}>Save identity</Button></CardContent></Card><Card className="party-card"><CardHeader><CardTitle><Search size={18} /> Choose something to watch</CardTitle></CardHeader><CardContent><form className="party-search-form" onSubmit={submitSearch}><Input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Search TMDB…" aria-label="Search TMDB catalog" /><Button type="submit" disabled={loadingSearch}>{loadingSearch ? <LoadingButtonContent label="Searching…" /> : "Search"}</Button></form>{results.length > 0 && <div className="party-search-results">{results.map((item) => <button className={cn("party-media-option", selectedTitle?.tmdbId === item.tmdbId && selectedTitle.mediaType === item.mediaType && "selected")} type="button" key={`${item.mediaType}-${item.tmdbId}`} onClick={() => setSelectedTitle(item)}><Poster item={item} /><span><strong>{item.title}</strong><small>{item.mediaType === "tv" ? "Series" : "Movie"} · {formatYear(item.releaseDate)}</small></span><Check size={16} /></button>)}</div>}{selectedTitle && <div className="party-selection"><Poster item={selectedTitle} /><div><p className="section-label">Selected title</p><strong>{selectedTitle.title}</strong><span>{selectedTitle.mediaType === "tv" ? "Series" : "Movie"} · {formatYear(selectedTitle.releaseDate)}</span></div></div>}{selectedTitle?.mediaType === "tv" && <div className="party-episode-selectors"><label className="party-field"><span>Season</span><select value={seasonNumber} onChange={(event) => setSeasonNumber(Number(event.target.value))} disabled={seasonLoading}>{selectedTitle.seasons?.map((item) => <option value={item.seasonNumber} key={item.seasonNumber}>{item.name}</option>)}</select></label><label className="party-field"><span>Episode</span><select value={episodeNumber} onChange={(event) => setEpisodeNumber(Number(event.target.value))} disabled={seasonLoading}>{season?.episodes.map((item) => <option value={item.episodeNumber} key={item.episodeNumber}>{String(item.episodeNumber).padStart(2, "0")} · {item.name}</option>)}</select></label>{seasonLoading && <LoadingIndicator compact label="Loading episodes…" />}</div>}{selectedEpisode && <p className="party-selection-note">Starting with episode {String(selectedEpisode.episodeNumber).padStart(2, "0")} · {selectedEpisode.name}</p>}<Button className="party-create-button" onClick={handleCreateRoom} disabled={!selectedTitle || creating || seasonLoading}><Radio size={16} /> {creating ? <LoadingButtonContent label="Creating room…" /> : "Create room"}</Button></CardContent></Card><Card className="party-card"><CardHeader><CardTitle><MessageCircle size={18} /> Join a room</CardTitle></CardHeader><CardContent><form className="party-search-form" onSubmit={handleJoin}><Input value={joinInput} onChange={(event) => setJoinInput(event.target.value)} placeholder="Paste a room link or room id" aria-label="Room link or room id" /><Button type="submit" variant="outline">Join</Button></form><p className="party-help">Your saved temporary identity will be used when you join.</p></CardContent></Card></div>
 }
 
 function WatchPartyRoomPage() {
@@ -495,6 +649,7 @@ function LiveWatchPartyRoom({ roomId }: { roomId: Id<"watchPartyRooms"> }) {
   const [syncStatus, setSyncStatus] = useState("Room state is waiting for the player")
   const [now, setNow] = useState(() => Date.now())
   const [embedLoaded, setEmbedLoaded] = useState(false)
+  const [switchingServer, setSwitchingServer] = useState<VideoServer | null>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const appliedRequestRef = useRef("")
   const positionRef = useRef(0)
@@ -521,6 +676,9 @@ function LiveWatchPartyRoom({ roomId }: { roomId: Id<"watchPartyRooms"> }) {
     getTitle(roomData.room.mediaType, roomData.room.tmdbId).then((result) => { if (live) setTitle(result ?? null) }).catch(() => undefined)
     return () => { live = false }
   }, [roomData?.room?.mediaType, roomData?.room?.tmdbId])
+  useEffect(() => {
+    setEmbedLoaded(false)
+  }, [roomData?.room?.server, roomData?.room?.tmdbId, roomData?.room?.seasonNumber, roomData?.room?.episodeNumber])
 
   const isHost = Boolean(roomData?.room && tokenHash && roomData.room.hostUserId === identity.userId && roomData.room.hostSessionId === sessionId)
   const pendingRequest = roomData?.playback?.pendingRequest
@@ -540,7 +698,7 @@ function LiveWatchPartyRoom({ roomId }: { roomId: Id<"watchPartyRooms"> }) {
     return () => window.clearInterval(timer)
   }, [isHost, roomId, snapshotPlayback?.isPlaying, snapshotPlayback?.revision, syncPlayback, tokenHash])
 
-  if (roomData === undefined) return <div className="mobile-page watchparty-page"><Skeleton className="party-room-skeleton" /></div>
+  if (roomData === undefined) return <div className="mobile-page watchparty-page"><div className="party-room-loading" role="status" aria-live="polite"><LoadingIndicator label="Loading room…" /><Skeleton className="party-room-skeleton" /></div></div>
   if (roomData === null) return <div className="mobile-page watchparty-page"><EmptyState title="Room unavailable" copy="This room may have expired or the link may be invalid." action={<Link className={buttonVariants()} to="/watchparty">Create or join another room</Link>} /></div>
 
   const room = roomData.room
@@ -585,6 +743,20 @@ function LiveWatchPartyRoom({ roomId }: { roomId: Id<"watchPartyRooms"> }) {
     } catch (reason) { setError(String(reason)) }
   }
 
+  async function handleServerChange(nextServer: VideoServer) {
+    if (!isHost || nextServer === room.server || switchingServer) return
+    setSwitchingServer(nextServer)
+    setEmbedLoaded(false)
+    const nextLabel = VIDEO_SERVERS.find((option) => option.id === nextServer)?.label ?? nextServer
+    setSyncStatus(`Loading ${nextLabel}…`)
+    try {
+      await setServer({ roomId, hostTokenHash: tokenHash, server: nextServer })
+    } catch (reason) {
+      setSwitchingServer(null)
+      setError(String(reason))
+    }
+  }
+
   async function handleMessage(event: FormEvent) {
     event.preventDefault()
     const body = messageInput.trim()
@@ -595,7 +767,7 @@ function LiveWatchPartyRoom({ roomId }: { roomId: Id<"watchPartyRooms"> }) {
     } catch (reason) { setError(String(reason)) }
   }
 
-  return <div className="mobile-page watchparty-page"><div className="party-room-topbar"><Link className="back-link" to="/watchparty"><ArrowLeft size={17} /> Watchparty</Link><div className="party-room-actions"><Button variant="ghost" size="icon" aria-label="Copy room link" onClick={copyRoomLink}><Copy size={17} /></Button><Button variant="ghost" size="icon" aria-label="Share room" onClick={shareRoom}><Share2 size={17} /></Button></div></div><div className="party-room-heading"><div><p className="page-kicker">Room</p><h1>{displayTitle}</h1><p>{room.mediaType === "tv" ? `Season ${room.seasonNumber} · Episode ${room.episodeNumber}` : "Movie"}</p></div><Badge variant={isHost ? "default" : "outline"}>{isHost ? "Host" : "Guest"}</Badge></div>{error && <InlineError message={error} onRetry={() => setError("")} />}<section className="party-player" aria-label="Watchparty video"><div className="party-player-frame">{embedUrl ? <iframe ref={iframeRef} title={`${serverLabel} player for ${displayTitle}`} src={embedUrl} allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setEmbedLoaded(true)} /> : <div className="party-player-empty">This provider needs a valid season and episode.</div>}<span className="party-player-status">{embedLoaded ? serverLabel : "Loading player"}</span></div><div className="party-playback-controls"><Button onClick={togglePlayback} disabled={!playback}><span className="party-control-icon">{playback?.isPlaying ? <Pause size={17} /> : <Play size={17} fill="currentColor" />}</span>{playback?.isPlaying ? "Pause for everyone" : "Play for everyone"}</Button><div className="party-sync-status" aria-live="polite">{syncStatus}<small>{Math.floor(position / 60)}:{String(Math.floor(position % 60)).padStart(2, "0")} · revision {playback?.revision ?? 0}</small></div></div></section><section className="party-server-section"><div className="party-section-heading"><div><p className="section-label">Playback source</p><h2>Server</h2></div><Badge variant="outline">{isHost ? "Host controlled" : "Read only"}</Badge></div><div className="party-server-options">{VIDEO_SERVERS.map((option) => <button className={cn("party-server-option", room.server === option.id && "selected")} type="button" key={option.id} disabled={!isHost || room.server === option.id} onClick={() => setServer({ roomId, hostTokenHash: tokenHash, server: option.id }).catch((reason) => setError(String(reason)))}><Server size={15} /><span>{option.label}</span>{room.server === option.id && <Check size={15} />}</button>)}</div></section>{!isHost && !hostIsPresent && <Button className="party-claim-host" variant="outline" onClick={handleClaimHost}>Claim host after inactivity</Button>}<section className="party-chat"><div className="party-section-heading"><div><p className="section-label">Room chat</p><h2><MessageCircle size={17} /> Chat</h2></div><Badge variant="outline"><Users size={13} /> {roomData.members.length}</Badge></div><div className="party-message-list" aria-live="polite">{messages.length ? messages.map((message) => <article className={cn("party-message", message.userId === identity.userId && "own")} key={`${message.userId}-${message.createdAt}`}><strong>{message.username}</strong><p>{message.body}</p></article>) : <p className="party-empty-chat">Say hello when everyone is in.</p>}</div><form className="party-composer" onSubmit={handleMessage}><Input value={messageInput} onChange={(event) => setMessageInput(event.target.value)} maxLength={500} placeholder={`Message as ${identity.username}`} aria-label="Chat message" /><Button size="icon" type="submit" aria-label="Send message"><Send size={17} /></Button></form></section><p className="party-disclaimer">Room state is synced through Convex. These cross-origin providers may ignore parent-page playback commands; MovieLand reports the request without claiming the iframe changed.</p></div>
+  return <div className="mobile-page watchparty-page"><div className="party-room-topbar"><Link className="back-link" to="/watchparty"><ArrowLeft size={17} /> Watchparty</Link><div className="party-room-actions"><Button variant="ghost" size="icon" aria-label="Copy room link" onClick={copyRoomLink}><Copy size={17} /></Button><Button variant="ghost" size="icon" aria-label="Share room" onClick={shareRoom}><Share2 size={17} /></Button></div></div><div className="party-room-heading"><div><p className="page-kicker">Room</p><h1>{displayTitle}</h1><p>{room.mediaType === "tv" ? `Season ${room.seasonNumber} · Episode ${room.episodeNumber}` : "Movie"}</p></div><Badge variant={isHost ? "default" : "outline"}>{isHost ? "Host" : "Guest"}</Badge></div>{error && <InlineError message={error} onRetry={() => setError("")} />}<section className="party-player" aria-label="Watchparty video" aria-busy={!embedLoaded}><div className="party-player-frame">{embedUrl ? <iframe ref={iframeRef} title={`${serverLabel} player for ${displayTitle}`} src={embedUrl} allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => { setEmbedLoaded(true); setSwitchingServer(null) }} /> : <div className="party-player-empty">This provider needs a valid season and episode.</div>}{!embedLoaded && embedUrl && <div className="player-loading-overlay"><LoadingIndicator label={`Loading ${serverLabel} player…`} /></div>}<span className="party-player-status">{embedLoaded ? serverLabel : "Loading player"}</span></div><div className="party-playback-controls"><Button onClick={togglePlayback} disabled={!playback || !embedLoaded}><span className="party-control-icon">{playback?.isPlaying ? <Pause size={17} /> : <Play size={17} fill="currentColor" />}</span>{playback?.isPlaying ? "Pause for everyone" : "Play for everyone"}</Button><div className="party-sync-status" aria-live="polite">{syncStatus}<small>{Math.floor(position / 60)}:{String(Math.floor(position % 60)).padStart(2, "0")} · revision {playback?.revision ?? 0}</small></div></div></section><section className="party-server-section"><div className="party-section-heading"><div><p className="section-label">Playback source</p><h2>Server</h2></div><Badge variant="outline">{isHost ? "Host controlled" : "Read only"}</Badge></div><div className="party-server-options">{VIDEO_SERVERS.map((option) => <button className={cn("party-server-option", room.server === option.id && "selected")} type="button" key={option.id} disabled={!isHost || room.server === option.id || Boolean(switchingServer)} onClick={() => handleServerChange(option.id)}><Server size={15} /><span>{option.label}</span>{switchingServer === option.id ? <LoadingIndicator compact label="Loading" /> : room.server === option.id && <Check size={15} />}</button>)}</div></section>{!isHost && !hostIsPresent && <Button className="party-claim-host" variant="outline" onClick={handleClaimHost}>Claim host after inactivity</Button>}<section className="party-chat"><div className="party-section-heading"><div><p className="section-label">Room chat</p><h2><MessageCircle size={17} /> Chat</h2></div><Badge variant="outline"><Users size={13} /> {roomData.members.length}</Badge></div><div className="party-message-list" aria-live="polite">{messages.length ? messages.map((message) => <article className={cn("party-message", message.userId === identity.userId && "own")} key={`${message.userId}-${message.createdAt}`}><strong>{message.username}</strong><p>{message.body}</p></article>) : <p className="party-empty-chat">Say hello when everyone is in.</p>}</div><form className="party-composer" onSubmit={handleMessage}><Input value={messageInput} onChange={(event) => setMessageInput(event.target.value)} maxLength={500} placeholder={`Message as ${identity.username}`} aria-label="Chat message" /><Button size="icon" type="submit" aria-label="Send message"><Send size={17} /></Button></form></section><p className="party-disclaimer">Room state is synced through Convex. These cross-origin providers may ignore parent-page playback commands; MovieLand reports the request without claiming the iframe changed.</p></div>
 }
 
 function MediaRail({ rail }: { rail: CatalogRail }) {
@@ -621,10 +793,62 @@ function positiveParam(value: string | null, fallback: number) { const number = 
 function InlineError({ message, onRetry }: { message: string; onRetry: () => void }) { return <Card className="state-box error-state" role="alert"><CardHeader><CardTitle>Live catalog unavailable</CardTitle></CardHeader><CardContent><span>{message}</span><Button variant="outline" onClick={onRetry}>Try again</Button></CardContent></Card> }
 function EmptyState({ title, copy, action }: { title: string; copy: string; action: ReactNode }) { return <Card className="state-box empty-state"><CardContent><Film size={24} /><strong>{title}</strong><span>{copy}</span>{action}</CardContent></Card> }
 function SearchPrompt() { return <Card className="search-prompt"><CardContent><Search size={26} /><h2>Search the catalog</h2><p>Look for a movie, series, person, or genre.</p></CardContent></Card> }
-function MobileDiscoverySkeleton() { return <><Skeleton className="skeleton-featured" />{[1, 2, 3, 4].map((row) => <section className="media-rail" key={row}><Skeleton className="skeleton-heading" /><div className="rail-track">{[1, 2, 3, 4].map((item) => <Skeleton className="skeleton-poster" key={item} />)}</div></section>)}</> }
-function PosterGridSkeleton() { return <div className="poster-grid">{[1, 2, 3, 4, 5, 6].map((item) => <Skeleton className="skeleton-grid-poster" key={item} />)}</div> }
-function DetailSkeleton() { return <div className="detail-hero"><Skeleton className="skeleton-detail-poster" /><div className="detail-copy"><Skeleton className="skeleton-line short" /><Skeleton className="skeleton-title" /><Skeleton className="skeleton-line" /></div></div> }
-function Footer() { return <footer className="mobile-footer"><span>Metadata by <a href="https://www.themoviedb.org/" target="_blank" rel="noreferrer">TMDB</a></span><span>IMDb IDs support playback</span></footer> }
+function MobileDiscoverySkeleton() { return <div className="catalog-loading-state" role="status" aria-live="polite"><LoadingIndicator label="Loading the catalog…" /><Skeleton className="skeleton-featured" />{[1, 2, 3, 4].map((row) => <section className="media-rail" key={row}><Skeleton className="skeleton-heading" /><div className="rail-track">{[1, 2, 3, 4].map((item) => <Skeleton className="skeleton-poster" key={item} />)}</div></section>)}</div> }
+function PosterGridSkeleton() { return <div className="catalog-loading-state" role="status" aria-live="polite"><LoadingIndicator label="Loading titles…" /><div className="poster-grid">{[1, 2, 3, 4, 5, 6].map((item) => <Skeleton className="skeleton-grid-poster" key={item} />)}</div></div> }
+function EpisodeListSkeleton() { return <div className="episode-loading-state" role="status" aria-live="polite"><LoadingIndicator label="Loading episodes…" />{[1, 2, 3].map((item) => <div className="episode-skeleton-row" key={item}><Skeleton className="episode-skeleton-number" /><Skeleton className="episode-skeleton-thumb" /><div><Skeleton className="episode-skeleton-line" /><Skeleton className="episode-skeleton-line short" /></div></div>)}</div> }
+function GenreRailsSkeleton() { return <section className="genre-loading-state" role="status" aria-live="polite"><LoadingIndicator label="Loading genres…" />{[1, 2].map((row) => <div className="media-rail" key={row}><Skeleton className="skeleton-heading" /><div className="rail-track">{[1, 2, 3, 4].map((item) => <Skeleton className="skeleton-poster" key={item} />)}</div></div>)}</section> }
+function DetailSkeleton() { return <div className="detail-skeleton catalog-loading-state" role="status" aria-live="polite"><LoadingIndicator label="Loading title details…" /><Skeleton className="skeleton-detail-backdrop" /><div className="detail-skeleton-copy"><Skeleton className="skeleton-detail-poster" /><div><Skeleton className="skeleton-line short" /><Skeleton className="skeleton-title" /><Skeleton className="skeleton-line" /></div></div></div> }
+function PrivacyPolicyPage() {
+  return <div className="mobile-page legal-page">
+    <Link className="back-link" to="/"><ArrowLeft size={17} /> Back to MovieLand</Link>
+    <div className="legal-heading">
+      <p className="page-kicker">MovieLand</p>
+      <h1>Privacy policy</h1>
+      <p>Last updated August 14, 2026</p>
+    </div>
+    <p className="legal-lead">MovieLand helps you discover movies and series. This policy explains what information the app stores, why it is used, and the choices available to you.</p>
+    <div className="legal-sections">
+      <section>
+        <h2>Information we handle</h2>
+        <p>MovieLand does not require an account for catalog browsing. The web and mobile app may store your saved titles, watch progress, download queue, temporary Watchparty identity, and room preferences on your device using local storage.</p>
+        <p>When you create or join a Watchparty, the temporary user ID, username, room activity, chat messages, presence heartbeat, and playback state are sent to Convex so the room can work in real time. This is temporary application identity, not production authentication.</p>
+      </section>
+      <section>
+        <h2>How information is used</h2>
+        <p>We use this information to provide catalog search and discovery, remember local preferences, synchronize Watchparty rooms, display chat messages, and operate playback and download features that you request.</p>
+        <p>We do not sell personal information, use Watchparty usernames for advertising profiles, or scrape IMDb. Movie metadata, artwork, credits, and external IDs are supplied by TMDB.</p>
+      </section>
+      <section>
+        <h2>Third-party services</h2>
+        <p>MovieLand connects to services that have their own privacy policies and terms:</p>
+        <ul>
+          <li><a href="https://www.themoviedb.org/privacy-policy" target="_blank" rel="noreferrer">TMDB</a> for catalog metadata and artwork.</li>
+          <li>Convex for Watchparty room state, chat, and realtime presence.</li>
+          <li>Google AdMob for ads in supported native builds. Ad requests and consent choices are handled according to Google's policies.</li>
+          <li>Video providers opened through an iframe or external link. Their pages may collect information directly under their own policies.</li>
+        </ul>
+      </section>
+      <section>
+        <h2>Storage and retention</h2>
+        <p>Local data remains on your device until you clear it, uninstall the app, or remove it through an available app control. Watchparty rooms, messages, playback, and presence records are designed to expire and be cleaned up after the room's inactive lifetime. Provider logs and ad data are controlled by the relevant third party.</p>
+      </section>
+      <section>
+        <h2>Your choices</h2>
+        <p>You can remove saved titles and downloads from MovieLand, clear the app's site data in your browser, leave a Watchparty, or uninstall the native app. You can also manage advertising and privacy choices through the consent controls shown by the supported native build.</p>
+      </section>
+      <section>
+        <h2>Children's privacy</h2>
+        <p>MovieLand is not directed to children under 13, and we do not knowingly collect personal information from children under 13. If you believe a child has provided information, contact the app publisher through the distribution channel where MovieLand was installed.</p>
+      </section>
+      <section>
+        <h2>Changes and contact</h2>
+        <p>We may update this policy when MovieLand's data practices change. The current version will remain available at this URL. For privacy questions or requests, contact the app publisher through the Google Play listing or the channel where you received the app.</p>
+      </section>
+    </div>
+  </div>
+}
+
+function Footer() { return <footer className="mobile-footer"><span>Metadata by <a href="https://www.themoviedb.org/" target="_blank" rel="noreferrer">TMDB</a></span><span><Link to="/privacy">Privacy policy</Link> · IMDb IDs support playback</span></footer> }
 function NotFound() { return <div className="mobile-page"><EmptyState title="Page not found" copy="That title or route is not available." action={<Link className={buttonVariants({ variant: "outline" })} to="/">Back to home</Link>} /></div> }
 
 export default App
