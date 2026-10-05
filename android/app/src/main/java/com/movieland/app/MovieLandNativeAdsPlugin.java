@@ -53,13 +53,13 @@ public class MovieLandNativeAdsPlugin extends Plugin {
             LinearLayout content = new LinearLayout(context);
             content.setOrientation(LinearLayout.VERTICAL);
             content.setPadding(dp(14), dp(10), dp(14), dp(10));
-            content.setBackgroundColor(Color.rgb(25, 28, 34));
+            content.setBackgroundColor(Color.WHITE);
 
-            TextView label = text(context, "ADVERTISEMENT", 10, Color.rgb(170, 177, 188));
+            TextView label = text(context, "ADVERTISEMENT", 10, Color.rgb(107, 113, 108));
             label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             content.addView(label, wrap());
 
-            TextView headline = text(context, "Sponsored", 16, Color.WHITE);
+            TextView headline = text(context, "Sponsored", 16, Color.rgb(29, 33, 31));
             headline.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             content.addView(headline, wrapWithTopMargin(6));
 
@@ -69,11 +69,15 @@ public class MovieLandNativeAdsPlugin extends Plugin {
                     dp(96)
             ));
 
-            TextView body = text(context, "", 12, Color.rgb(205, 210, 218));
+            TextView body = text(context, "", 12, Color.rgb(107, 113, 108));
             content.addView(body, wrapWithTopMargin(5));
 
             Button cta = new Button(context);
             cta.setAllCaps(false);
+            cta.setElevation(0);
+            cta.setStateListAnimator(null);
+            cta.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(29, 33, 31)));
+            cta.setTextColor(Color.WHITE);
             cta.setText("Learn more");
             content.addView(cta, wrapWithTopMargin(6));
 
@@ -87,17 +91,17 @@ public class MovieLandNativeAdsPlugin extends Plugin {
             ));
 
             FrameLayout card = new FrameLayout(context);
-            card.setBackgroundColor(Color.rgb(25, 28, 34));
+            card.setBackgroundColor(Color.WHITE);
             card.addView(adView, new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT
             ));
 
-            TextView close = text(context, "×", 22, Color.WHITE);
+            TextView close = text(context, "×", 22, Color.rgb(29, 33, 31));
             close.setGravity(Gravity.CENTER);
             close.setContentDescription("Close advertisement");
             close.setOnClickListener(view -> removeOverlay());
-            FrameLayout.LayoutParams closeParams = new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP | Gravity.END);
+            FrameLayout.LayoutParams closeParams = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.END);
             card.addView(close, closeParams);
 
             overlay = card;

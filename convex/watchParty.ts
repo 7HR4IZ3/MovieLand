@@ -113,6 +113,7 @@ export const createRoom = mutation({
     if (args.mediaType === "tv" && (!Number.isInteger(args.seasonNumber) || !Number.isInteger(args.episodeNumber))) {
       throw new Error("A season and episode are required for a series room")
     }
+    if (args.server !== "vidlove") throw new Error("Only VidLove is supported")
     const now = Date.now()
     const userId = cleanUserId(args.userId)
     const username = cleanUsername(args.username)
@@ -308,6 +309,7 @@ export const setServer = mutation({
   args: { roomId: v.id("watchPartyRooms"), hostTokenHash: v.string(), server: videoServer },
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (args.server !== "vidlove") throw new Error("Only VidLove is supported")
     const room = cleanRoom(await ctx.db.get(args.roomId))
     if (cleanTokenHash(args.hostTokenHash) !== room.hostTokenHash) throw new Error("Only the active host can change the server")
     await touchRoom(ctx, room, Date.now())

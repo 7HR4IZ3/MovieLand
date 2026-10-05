@@ -11,6 +11,8 @@
 import type * as catalog from "../catalog.js";
 import type * as catalogActions from "../catalogActions.js";
 import type * as crons from "../crons.js";
+import type * as downloads from "../downloads.js";
+import type * as lib_downloads from "../lib/downloads.js";
 import type * as lib_normalize from "../lib/normalize.js";
 import type * as lib_tmdb from "../lib/tmdb.js";
 import type * as watchParty from "../watchParty.js";
@@ -25,6 +27,8 @@ declare const fullApi: ApiFromModules<{
   catalog: typeof catalog;
   catalogActions: typeof catalogActions;
   crons: typeof crons;
+  downloads: typeof downloads;
+  "lib/downloads": typeof lib_downloads;
   "lib/normalize": typeof lib_normalize;
   "lib/tmdb": typeof lib_tmdb;
   watchParty: typeof watchParty;

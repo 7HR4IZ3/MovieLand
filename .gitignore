@@ -19,3 +19,5 @@ android/app/*.jks
 android/app/*.keystore
 build
 .vercel
+
+.movieland-downloads/

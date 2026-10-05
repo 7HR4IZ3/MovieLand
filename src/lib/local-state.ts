@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
+import { subscribeProviderDownloads } from "./download-service"
 import type { MediaType } from "./types"
 import { listNativeDownloads, subscribeNativeDownloadProgress, type NativeDownloadProgress } from "./native-download"
 
@@ -8,7 +9,7 @@ const DOWNLOADS_KEY = "movieland:downloads"
 
 export type SavedTitle = { tmdbId: number; mediaType: MediaType }
 
-export type DownloadStatus = "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed" | "opened"
+export type DownloadStatus = "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed" | "opened" | "resolving" | "processing" | "cancelled" | "ready"
 
 export type DownloadItem = {
   id: string
@@ -21,6 +22,11 @@ export type DownloadItem = {
   server: string
   url: string
   fileName?: string
+  engine?: "native" | "server" | "browser"
+  remoteId?: string
+  fileUrl?: string
+  progressPercent?: number
+  durationSeconds?: number
   sourceType?: "embed" | "direct"
   status: DownloadStatus
   createdAt: number
@@ -73,7 +79,8 @@ function makeDownloadId() {
 function normalizeDownload(item: Partial<DownloadItem> & Pick<DownloadItem, "id" | "tmdbId" | "mediaType" | "title" | "server" | "url" | "createdAt">): DownloadItem {
   return {
     ...item,
-    status: item.status ?? "queued",
+    status: item.engine === "server" ? "failed" : item.status ?? "queued",
+    ...(item.engine === "server" ? { fileUrl: undefined, error: "This local worker download is no longer available. Use VidLove’s download option, if offered." } : {}),
     updatedAt: item.updatedAt ?? item.createdAt,
     bytesDownloaded: item.bytesDownloaded ?? 0,
     totalBytes: item.totalBytes ?? 0,
@@ -130,10 +137,29 @@ export function useDownloads() {
     }
   }, [])
 
+  const [syncError, setSyncError] = useState("")
+  useEffect(() => {
+    if (!loaded) return
+    return subscribeProviderDownloads(remote => {
+      setSyncError("")
+      setItems(current => {
+        const nativeRemoteIds = new Set(current.filter(item => item.engine === "native").map(item => item.remoteId))
+        const synced = remote.filter(row => !nativeRemoteIds.has(row.id)).map(row => normalizeDownload({
+          id: `convex-${row.id}`, remoteId: row.id, engine: "browser", server: "VidLove",
+          tmdbId: row.tmdbId, mediaType: row.mediaType, title: row.title,
+          seasonNumber: row.seasonNumber, episodeNumber: row.episodeNumber,
+          fileName: row.fileName, url: "", sourceType: "direct", status: row.status,
+          createdAt: row.createdAt, updatedAt: row.updatedAt,
+        }))
+        return [...synced, ...current.filter(item => item.engine !== "browser")]
+      })
+    }, error => setSyncError(error.message))
+  }, [loaded])
+
   const addDownload = useCallback((input: Omit<DownloadItem, "id" | "status" | "createdAt" | "updatedAt" | "bytesDownloaded" | "totalBytes" | "speedBytesPerSecond">) => {
     const now = Date.now()
     const item = normalizeDownload({ ...input, id: makeDownloadId(), status: input.sourceType === "direct" ? "queued" : "waiting", createdAt: now, updatedAt: now, bytesDownloaded: 0, totalBytes: 0, speedBytesPerSecond: 0 })
-    setItems((current) => [item, ...current.filter((entry) => entry.url !== item.url)])
+    setItems((current) => [item, ...current.filter((entry) => !(entry.tmdbId === item.tmdbId && entry.mediaType === item.mediaType && entry.seasonNumber === item.seasonNumber && entry.episodeNumber === item.episodeNumber && entry.engine === item.engine))])
     return item
   }, [])
 
@@ -149,5 +175,5 @@ export function useDownloads() {
 
   const clearDownloads = useCallback(() => setItems([]), [])
 
-  return { items, addDownload, updateDownload, markOpened, removeDownload, clearDownloads }
+  return { items, syncError, addDownload, updateDownload, markOpened, removeDownload, clearDownloads }
 }

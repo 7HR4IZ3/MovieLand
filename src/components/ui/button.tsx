@@ -3,20 +3,20 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "../../lib/utils"
 
 export const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+  "ui-button",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
-        outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
-        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground",
+        default: "ui-button-primary",
+        outline: "ui-button-quiet",
+        secondary: "ui-button-secondary",
+        ghost: "ui-button-quiet",
       },
       size: {
-        default: "h-11 px-4 py-2",
-        sm: "h-11 rounded-md px-3",
-        lg: "h-12 rounded-md px-8",
-        icon: "h-11 w-11",
+        default: "ui-button-default",
+        sm: "ui-button-small",
+        lg: "ui-button-large",
+        icon: "ui-button-icon",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

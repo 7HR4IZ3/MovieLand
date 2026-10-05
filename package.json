@@ -13,7 +13,8 @@
     "convex:codegen": "convex codegen",
     "cap:sync": "bun run build:static && cap sync",
     "cap:add:ios": "cap add ios",
-    "cap:add:android": "cap add android"
+    "cap:add:android": "cap add android",
+    "test:downloads": "bun test tests/downloads.test.ts"
   },
   "dependencies": {
     "@capacitor-community/admob": "^8.1.0",
@@ -21,10 +22,10 @@
     "@capacitor/app": "^8.0.0",
     "@capacitor/core": "^8.0.0",
     "@capacitor/ios": "^8.0.0",
+    "@phosphor-icons/react": "^2.1.10",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "convex": "^1.29.0",
-    "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.0.2",
@@ -33,12 +34,14 @@
   "devDependencies": {
     "@capacitor/cli": "^8.0.0",
     "@eslint/js": "^9.17.0",
+    "@types/bun": "^1.4.2",
     "@types/node": "^26.6.4",
     "@types/react": "^19.0.3",
     "@types/react-dom": "^19.0.2",
     "@vercel/node": "^20.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "convex-test": "^0.0.60",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.16",

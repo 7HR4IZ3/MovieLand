@@ -4,5 +4,6 @@ import { internal } from "./_generated/api"
 const crons = cronJobs()
 
 crons.interval("watchparty room cleanup", { hours: 1 }, internal.watchParty.cleanupExpired, {})
+crons.interval("download history cleanup", { hours: 1 }, internal.downloads.cleanupExpired, {})
 
 export default crons

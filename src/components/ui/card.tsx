@@ -2,21 +2,21 @@ import { forwardRef, type HTMLAttributes } from "react"
 import { cn } from "../../lib/utils"
 
 export const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("rounded-lg border bg-card text-card-foreground", className)} {...props} />
+  <div ref={ref} className={cn("content-group", className)} {...props} />
 ))
 Card.displayName = "Card"
 
 export const CardHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("card-header flex flex-col space-y-1.5 p-6", className)} {...props} />
+  <div ref={ref} className={cn("card-header", className)} {...props} />
 ))
 CardHeader.displayName = "CardHeader"
 
 export const CardTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadingElement>>(({ className, ...props }, ref) => (
-  <h3 ref={ref} className={cn("card-title text-2xl font-semibold leading-none tracking-tight", className)} {...props} />
+  <h3 ref={ref} className={cn("card-title", className)} {...props} />
 ))
 CardTitle.displayName = "CardTitle"
 
 export const CardContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("card-content p-6 pt-0", className)} {...props} />
+  <div ref={ref} className={cn("card-content", className)} {...props} />
 ))
 CardContent.displayName = "CardContent"

@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server"
 import { v } from "convex/values"
+import { downloadSelection } from "./lib/downloads"
 
 const credit = v.object({
   id: v.number(),
@@ -46,6 +47,33 @@ const recommendation = v.object({
 const videoServer = v.union(v.literal("vidlove"), v.literal("vidapi"), v.literal("cdnm"), v.literal("nontongo"), v.literal("111movies"), v.literal("videasy"))
 
 export default defineSchema({
+  downloadSources: defineTable({
+    ...downloadSelection,
+    key: v.string(),
+    title: v.string(),
+    fileName: v.string(),
+    contentType: v.union(v.literal("video/mp4"), v.literal("video/webm")),
+    fileUrl: v.optional(v.string()),
+    storageId: v.optional(v.id("_storage")),
+    enabled: v.boolean(),
+    expiresAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"])
+    .index("by_storageId", ["storageId"]),
+  downloadHistory: defineTable({
+    ...downloadSelection,
+    ownerHash: v.string(),
+    key: v.string(),
+    sourceId: v.id("downloadSources"),
+    title: v.string(),
+    fileName: v.string(),
+    status: v.union(v.literal("ready"), v.literal("opened")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    expiresAt: v.number(),
+  }).index("by_ownerHash", ["ownerHash"])
+    .index("by_ownerHash_and_key", ["ownerHash", "key"])
+    .index("by_expiresAt", ["expiresAt"]),
   titles: defineTable({
     tmdbId: v.number(),
     imdbId: v.optional(v.string()),

@@ -55,9 +55,13 @@ The MovieLand app icon source lives at `resources/icon.png` and is expanded into
 
 The watch route defaults to VidLove's TMDB-ID embed (`https://player.vidlove.cc/embed/...`). VidLove's current embed seek bridge powers MovieLand's rewind/forward overlay buttons; the other cross-origin providers remain provider-controlled. VidLove's own download UI is enabled through its embed option and remains subject to the provider's terms and the content rights for your deployment.
 
+### Downloads
+
+The web app uses Convex for supported file sources and device download history, and Vercel for SSR. The browser or iOS app transfers direct files. VidLove is the only playback provider; its embedded download option remains enabled. A direct-file API from VidLove has not been verified, so MovieLand reports unavailable downloads until a supported file is registered. See [download configuration](docs/DOWNLOADS.md).
+
 ### Embedded player ads
 
-MovieLand cannot reliably remove advertisements from VidAPI, CDNM, or NontonGo iframes because they are cross-origin providers. The parent app cannot inspect or rewrite their DOM, and a generic network blocklist can break playback or miss server-side ads. The safe options are an official ad-free provider endpoint, a licensed playback provider, or an optional future native `WKContentRuleList` for known tracker hosts with clear user-facing limitations.
+VidLove controls its cross-origin iframe. MovieLand cannot inspect or rewrite its DOM. Provider-supported controls remain inside the player.
 
 ## Data and attribution
 
