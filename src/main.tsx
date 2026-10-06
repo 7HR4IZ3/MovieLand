@@ -6,7 +6,6 @@ import { hydrateRoot } from "react-dom/client"
 import { AppWithCatalogData } from "./App"
 import type { ServerCatalogData } from "./lib/catalog-data"
 import { convexReactClient } from "./lib/convex"
-import "./styles.css"
 
 const app = (
   <React.StrictMode>

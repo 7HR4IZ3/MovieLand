@@ -11,6 +11,7 @@ export type ServerCatalogData = {
   search?: SearchResponse
   title?: MediaTitle
   season?: Season
+  titleLoaded?: boolean
 }
 
 const convexUrl = (process.env.CONVEX_URL ?? import.meta.env.VITE_CONVEX_URL ?? "").trim()
@@ -42,7 +43,12 @@ export function getTitle(mediaType: "movie" | "tv", tmdbId: number) {
   return withFallback(() => action<MediaTitle>("catalog:getTitle", { mediaType, tmdbId }), () => getFixtureTitle(mediaType, tmdbId))
 }
 export function getSeason(tmdbId: number, seasonNumber: number) {
-  return withFallback(() => action<Season>("catalog:getSeason", { tmdbId, seasonNumber }), () => fixtureSeasons[tmdbId])
+  return withFallback(() => action<Season>("catalog:getSeason", { tmdbId, seasonNumber }), () => fixtureSeasons[tmdbId]?.seasonNumber === seasonNumber ? fixtureSeasons[tmdbId] : undefined)
+}
+
+function positiveParam(value: string | null, fallback: number) {
+  const number = Number(value)
+  return Number.isSafeInteger(number) && number > 0 ? number : fallback
 }
 
 export async function loadServerCatalogData(url: URL): Promise<ServerCatalogData> {
@@ -60,14 +66,17 @@ export async function loadServerCatalogData(url: URL): Promise<ServerCatalogData
     const category = genreSlug ? `genre-${genreSlug}` : segments[1]
     const parsedYear = Number(url.searchParams.get("year"))
     const year = Number.isInteger(parsedYear) && parsedYear > 0 ? parsedYear : new Date().getFullYear()
-    return { browse: await getBrowse(category, { page: 1, year: category === "top-250-movies" ? year : undefined, genreSlug }) }
+    return { browse: await getBrowse(category, { page: positiveParam(url.searchParams.get("page"), 1), year: category === "top-250-movies" ? year : undefined, genreSlug }) }
   }
-  if ((segments[0] === "movie" || segments[0] === "series") && segments.length === 2) {
-    const id = Number(segments[1])
-    if (!Number.isSafeInteger(id) || id <= 0) return {}
-    const mediaType = segments[0] === "series" ? "tv" : "movie"
+  const titleSegments = segments[0] === "watch" ? segments.slice(1) : segments
+  if ((titleSegments[0] === "movie" || titleSegments[0] === "series") && titleSegments.length === 2) {
+    const id = Number(titleSegments[1])
+    if (!Number.isSafeInteger(id) || id <= 0) return { titleLoaded: true }
+    const mediaType = titleSegments[0] === "series" ? "tv" : "movie"
     const title = await getTitle(mediaType, id)
-    return title ? { title } : {}
+    const seasonNumber = positiveParam(url.searchParams.get("season"), title?.seasons?.[0]?.seasonNumber ?? 1)
+    const season = title && mediaType === "tv" ? await getSeason(id, seasonNumber) : undefined
+    return { title, season, titleLoaded: true }
   }
   return {}
 }

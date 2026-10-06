@@ -14,7 +14,8 @@
     "cap:sync": "bun run build:static && cap sync",
     "cap:add:ios": "cap add ios",
     "cap:add:android": "cap add android",
-    "test:downloads": "bun test tests/downloads.test.ts"
+    "test:downloads": "bun test tests/downloads.test.ts",
+    "test:no-js": "bun test tests/no-javascript.test.ts"
   },
   "dependencies": {
     "@capacitor-community/admob": "^8.1.0",

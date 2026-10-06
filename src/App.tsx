@@ -48,12 +48,15 @@ import {
 const fallbackBackdrop = "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1800&q=80"
 type PosterItem = MediaTitle | MediaRecommendation
 const CatalogDataContext = createContext<ServerCatalogData>({})
+const EnhancedContext = createContext(false)
 
 export function AppWithCatalogData({ data }: { data: ServerCatalogData }) {
   const location = useLocation()
   const route = location.pathname + location.search
   const initialRoute = useRef(route)
-  return <CatalogDataContext.Provider value={route === initialRoute.current ? data : {}}><IconContext.Provider value={{ weight: "bold", size: 20, "aria-hidden": true }}><App /></IconContext.Provider></CatalogDataContext.Provider>
+  const [enhanced, setEnhanced] = useState(false)
+  useEffect(() => setEnhanced(true), [])
+  return <EnhancedContext.Provider value={enhanced}><CatalogDataContext.Provider value={route === initialRoute.current ? data : {}}><IconContext.Provider value={{ weight: "bold", size: 20, "aria-hidden": true }}><App /></IconContext.Provider></CatalogDataContext.Provider></EnhancedContext.Provider>
 }
 
 function formatBytes(value: number) {
@@ -177,9 +180,9 @@ function BrowsePage({ genreSlug }: { genreSlug?: string }) {
   const resolvedGenreSlug = genreSlug ?? routeGenreSlug
   const browseCategory = resolvedGenreSlug ? `genre-${resolvedGenreSlug}` : category
   const requestedYear = positiveParam(params.get("year"), new Date().getFullYear())
+  const requestedPage = positiveParam(params.get("page"), 1)
   const [state, setState] = useState<BrowseResponse | null>(serverData.browse ?? null)
   const [items, setItems] = useState<MediaTitle[]>(serverData.browse?.items ?? [])
-  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState("")
   useEffect(() => {
     if (serverData.browse) return
@@ -187,34 +190,27 @@ function BrowsePage({ genreSlug }: { genreSlug?: string }) {
     setState(null)
     setItems([])
     setError("")
-    getBrowse(browseCategory, { page: 1, year: browseCategory === "top-250-movies" ? requestedYear : undefined, genreSlug: resolvedGenreSlug }).then((result) => {
+    getBrowse(browseCategory, { page: requestedPage, year: browseCategory === "top-250-movies" ? requestedYear : undefined, genreSlug: resolvedGenreSlug }).then((result) => {
       if (!live) return
       setState(result)
       setItems(result.items)
     }).catch((reason) => { if (live) setError(String(reason)) })
     return () => { live = false }
-  }, [browseCategory, resolvedGenreSlug, requestedYear, serverData.browse])
+  }, [browseCategory, resolvedGenreSlug, requestedYear, requestedPage, serverData.browse])
   function changeYear(value: string) {
     const next = new URLSearchParams(params)
     next.set("year", value)
+    next.delete("page")
     setParams(next)
-  }
-  async function loadMore() {
-    if (!state || loadingMore || state.page >= state.totalPages) return
-    setLoadingMore(true)
-    try {
-      const result = await getBrowse(browseCategory, { page: state.page + 1, year: browseCategory === "top-250-movies" ? requestedYear : undefined, genreSlug: resolvedGenreSlug })
-      setState((current) => current ? { ...result, items: [...current.items, ...result.items] } : result)
-      setItems((current) => [...current, ...result.items])
-    } catch (reason) {
-      setError(String(reason))
-    } finally {
-      setLoadingMore(false)
-    }
   }
   const yearOptions = Array.from({ length: Math.max(1, new Date().getFullYear() - 1949) }, (_, index) => new Date().getFullYear() - index)
   const displayItems = state ? items : []
-  return <div className="mobile-page browse-page" aria-busy={!state && !error}><Link className="back-link" to="/"><ArrowLeft size={22} /><span className="sr-only">Back to discover</span></Link>{error && <InlineError message={error} onRetry={() => window.location.reload()} />}{!state && !error ? <PosterGridSkeleton /> : state && <><div className="mobile-page-heading"><div><p className="page-kicker">Browse</p><h1>{state.label}</h1></div><Badge variant="outline">{state.totalResults} titles</Badge></div>{browseCategory === "top-250-movies" && <label className="browse-filter"><span>Year</span><select value={requestedYear} onChange={(event) => changeYear(event.target.value)}>{yearOptions.map((year) => <option value={year} key={year}>{year}</option>)}</select><ChevronDown size={14} /></label>}{resolvedGenreSlug && <p className="browse-description">Movies and series tagged {params.get("name") ?? state.label}.</p>}<PosterGrid items={displayItems} />{state.page < state.totalPages && <Button className="load-more" variant="outline" onClick={loadMore} disabled={loadingMore}>{loadingMore ? <LoadingButtonContent label="Loading more…" /> : "Load more"}</Button>}</>}</div>
+  const pagePath = (page: number) => {
+    const next = new URLSearchParams(params)
+    next.set("page", String(page))
+    return `?${next}`
+  }
+  return <div className="mobile-page browse-page" aria-busy={!state && !error}><Link className="back-link" to="/"><ArrowLeft size={22} /><span className="sr-only">Back to discover</span></Link>{error && <InlineError message={error} onRetry={() => window.location.reload()} />}{!state && !error ? <PosterGridSkeleton /> : state && <><div className="mobile-page-heading"><div><p className="page-kicker">Browse</p><h1>{state.label}</h1></div><Badge variant="outline">{state.totalResults} titles</Badge></div>{browseCategory === "top-250-movies" && <form method="get" className="native-filter-form"><label className="browse-filter"><span>Year</span><select name="year" value={requestedYear} onChange={(event) => changeYear(event.target.value)}>{yearOptions.map((year) => <option value={year} key={year}>{year}</option>)}</select><ChevronDown size={14} /></label><Button type="submit" variant="outline">Apply</Button></form>}{resolvedGenreSlug && <p className="browse-description">Movies and series tagged {params.get("name") ?? state.label}.</p>}<PosterGrid items={displayItems} /><nav className="catalog-pagination" aria-label="Catalog pages">{requestedPage > 1 && <Link className={buttonVariants({ variant: "outline" })} to={pagePath(requestedPage - 1)}>Previous page</Link>}{state.page < state.totalPages && <Link className={buttonVariants({ variant: "outline" })} to={pagePath(state.page + 1)}>Next page</Link>}</nav></>}</div>
 }
 
 function FeaturedCard({ item }: { item: MediaTitle }) {
@@ -242,10 +238,11 @@ function SearchPage() {
     return () => { live = false }
   }, [query, serverData.search])
   function submit(event: FormEvent) { event.preventDefault(); navigate(`/search?q=${encodeURIComponent(input.trim())}`) }
-  return <div className="mobile-page search-page" aria-busy={Boolean(query && !items)}><div className="mobile-page-heading"><div><p className="page-kicker">Catalog</p><h1>Search</h1></div></div><form className="mobile-page-search" onSubmit={submit}><Search size={17} aria-hidden="true" /><Input aria-label="Search catalog" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Search movies, series, people…" /><Button type="submit" size="icon" aria-label="Submit search" title="Search"><ArrowRightIcon size={22} /></Button></form>{query && <div className="results-summary"><h2>“{query}”</h2><span>{items?.length ?? 0} titles</span></div>}{error && <InlineError message={error} onRetry={() => window.location.reload()} />}{!query ? <SearchPrompt /> : !items ? <PosterGridSkeleton /> : items.length ? <PosterGrid items={items} /> : <EmptyState title="No results" copy="Try another title, actor, or genre." action={<Link className={buttonVariants({ variant: "outline" })} to="/">Back to home</Link>} />}</div>
+  return <div className="mobile-page search-page" aria-busy={Boolean(query && !items)}><div className="mobile-page-heading"><div><p className="page-kicker">Catalog</p><h1>Search</h1></div></div><form className="mobile-page-search" action="/search" method="get" onSubmit={submit}><Search size={17} aria-hidden="true" /><Input name="q" aria-label="Search catalog" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Search movies, series, people…" /><Button type="submit" size="icon" aria-label="Submit search" title="Search"><ArrowRightIcon size={22} /></Button></form>{query && <div className="results-summary"><h2>“{query}”</h2><span>{items?.length ?? 0} titles</span></div>}{error && <InlineError message={error} onRetry={() => window.location.reload()} />}{!query ? <SearchPrompt /> : !items ? <PosterGridSkeleton /> : items.length ? <PosterGrid items={items} /> : <EmptyState title="No results" copy="Try another title, actor, or genre." action={<Link className={buttonVariants({ variant: "outline" })} to="/">Back to home</Link>} />}</div>
 }
 
 function DownloadsPage() {
+  const enhanced = useContext(EnhancedContext)
   const { items, syncError, clearDownloads, removeDownload, updateDownload } = useDownloads()
   const [notice, setNotice] = useState("")
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -309,6 +306,7 @@ function DownloadsPage() {
     finally { setBusyId(null) }
   }
 
+  if (!enhanced) return <ScriptRequired title="Downloads" copy="Enable JavaScript to access download history on this device." />
   return <div className="mobile-page downloads-page">
     <div className="mobile-page-heading"><div><p className="page-kicker">On this device</p><h1>Downloads</h1></div><Badge variant="outline">{items.length}</Badge></div>
     {(notice || syncError) && <p className="download-notice" role="status">{notice || syncError}</p>}
@@ -337,6 +335,7 @@ function DownloadsPage() {
 }
 
 function MyListPage() {
+  const enhanced = useContext(EnhancedContext)
   const { entries } = useMyList()
   const [items, setItems] = useState<MediaTitle[] | null>(null)
   const [error, setError] = useState("")
@@ -345,6 +344,7 @@ function MyListPage() {
     Promise.all(entries.map((entry) => getTitle(entry.mediaType, entry.tmdbId))).then((results) => { if (live) setItems(results.filter((item): item is MediaTitle => Boolean(item))) }).catch((reason) => { if (live) setError(String(reason)) })
     return () => { live = false }
   }, [entries])
+  if (!enhanced) return <ScriptRequired title="My list" copy="Enable JavaScript to access titles saved on this device." />
   return <div className="mobile-page search-page"><div className="mobile-page-heading"><div><p className="page-kicker">Library</p><h1>My list</h1></div><Badge variant="outline">{entries.length}</Badge></div>{error && <InlineError message={error} onRetry={() => window.location.reload()} />}{items === null ? <PosterGridSkeleton /> : items.length ? <PosterGrid items={items} /> : <EmptyState title="Your list is empty" copy="Save a title to find it here." action={<Link className={buttonVariants()} to="/">Browse titles</Link>} />}</div>
 }
 
@@ -363,18 +363,27 @@ function DetailPage({ mediaType }: { mediaType: "movie" | "tv" }) {
     return () => { live = false }
   }, [mediaType, id, serverData.title])
   if (error) return <div className="mobile-page"><InlineError message={error} onRetry={() => window.location.reload()} /></div>
+  if (!title && serverData.titleLoaded) return <NotFound />
   if (!title) return <div className="mobile-page"><DetailSkeleton /></div>
   return <DetailContent title={title} />
 }
 
 function DetailContent({ title }: { title: MediaTitle }) {
+  const serverData = useContext(CatalogDataContext)
+  const enhanced = useContext(EnhancedContext)
+  const [params] = useSearchParams()
   const { toggle, has } = useMyList()
-  const firstSeason = title.seasons?.[0]?.seasonNumber ?? 1
+  const firstSeason = positiveParam(params.get("season"), title.seasons?.[0]?.seasonNumber ?? 1)
   const [seasonNumber, setSeasonNumber] = useState(firstSeason)
-  const [season, setSeason] = useState<Season | null>(null)
-  const [seasonLoading, setSeasonLoading] = useState(title.mediaType === "tv")
+  const [season, setSeason] = useState<Season | null>(serverData.season ?? null)
+  const [seasonLoading, setSeasonLoading] = useState(title.mediaType === "tv" && !serverData.titleLoaded)
   useEffect(() => {
     if (title.mediaType !== "tv") {
+      setSeasonLoading(false)
+      return
+    }
+    if (serverData.titleLoaded && seasonNumber === firstSeason) {
+      setSeason(serverData.season ?? null)
       setSeasonLoading(false)
       return
     }
@@ -383,11 +392,11 @@ function DetailContent({ title }: { title: MediaTitle }) {
     setSeasonLoading(true)
     getSeason(title.tmdbId, seasonNumber).then((result) => { if (live) setSeason(result ?? null) }).catch(() => undefined).finally(() => { if (live) setSeasonLoading(false) })
     return () => { live = false }
-  }, [title.tmdbId, title.mediaType, seasonNumber])
+  }, [title.tmdbId, title.mediaType, seasonNumber, serverData.titleLoaded, firstSeason])
   const firstEpisode = season?.episodes[0]?.episodeNumber ?? 1
   return <div className="mobile-page detail-page">
     <div className="detail-visual"><img className="detail-backdrop-image" src={tmdbImageUrl(title.backdropPath, "w780") ?? fallbackBackdrop} alt={`${title.title} backdrop`} /><div className="detail-visual-scrim" /><Link className="detail-back-link" to="/"><ArrowLeft size={22} /><span className="sr-only">Back to discover</span></Link><div className="detail-hero"><Poster item={title} size="large" /><div className="detail-title"><p className="detail-type">{title.mediaType === "tv" ? "Series" : "Movie"}</p><h1>{title.title}</h1><div className="meta-line"><span>{formatYear(title.releaseDate)}</span><span>·</span><span>{title.mediaType === "tv" ? `${title.seasons?.length ?? 0} seasons` : formatRuntime(title.runtime)}</span><span>·</span><span className="rating"><Star size={12} weight="fill" /> {title.rating?.toFixed(1) ?? "—"}</span></div></div></div></div>
-    <div className="detail-body"><div className="genre-list">{title.genres.map((genre) => <span key={genre}>{genre}</span>)}</div><p className="detail-overview">{title.overview}</p><div className="action-row"><Link className={buttonVariants({ size: "icon" })} aria-label="Play title" title="Play" to={title.mediaType === "tv" ? `/watch/series/${title.tmdbId}?season=${seasonNumber}&episode=${firstEpisode}` : `/watch/movie/${title.tmdbId}`}><Play size={22} weight="fill" /></Link><Button variant="outline" size="icon" aria-label={has(title.tmdbId) ? "Remove from my list" : "Save to my list"} title={has(title.tmdbId) ? "Remove from my list" : "Save to my list"} aria-pressed={has(title.tmdbId)} className={cn(has(title.tmdbId) && "selected")} onClick={() => toggle(title.tmdbId, title.mediaType)}><Heart size={22} weight={has(title.tmdbId) ? "fill" : "bold"} /></Button></div></div>
+    <div className="detail-body"><div className="genre-list">{title.genres.map((genre) => <span key={genre}>{genre}</span>)}</div><p className="detail-overview">{title.overview}</p><div className="action-row"><Link className={buttonVariants({ size: "icon" })} aria-label="Play title" title="Play" to={title.mediaType === "tv" ? `/watch/series/${title.tmdbId}?season=${seasonNumber}&episode=${firstEpisode}` : `/watch/movie/${title.tmdbId}`}><Play size={22} weight="fill" /></Link><Button disabled={!enhanced} variant="outline" size="icon" aria-label={has(title.tmdbId) ? "Remove from my list" : "Save to my list"} title={has(title.tmdbId) ? "Remove from my list" : "Save to my list"} aria-pressed={has(title.tmdbId)} className={cn(has(title.tmdbId) && "selected")} onClick={() => toggle(title.tmdbId, title.mediaType)}><Heart size={22} weight={has(title.tmdbId) ? "fill" : "bold"} /></Button></div></div>
     {title.mediaType === "tv" && <EpisodeBrowser title={title} season={season} loading={seasonLoading} seasonNumber={seasonNumber} episodeNumber={firstEpisode} onSeasonChange={setSeasonNumber} />}
     <InfoGrid title={title} />
     <TrailerSection title={title} />
@@ -420,18 +429,21 @@ function CreditsSection({ title }: { title: MediaTitle }) {
 
 function EpisodeBrowser({ title, season, loading = false, seasonNumber, episodeNumber, onSeasonChange, server, watchMode = false }: { title: MediaTitle; season: Season | null; loading?: boolean; seasonNumber: number; episodeNumber: number; onSeasonChange?: (season: number) => void; server?: VideoServer; watchMode?: boolean }) {
   const navigate = useNavigate()
-  const [showAll, setShowAll] = useState(false)
+  const enhanced = useContext(EnhancedContext)
+  const [showAll, setShowAll] = useState(true)
   const episodePath = (nextSeason: number, nextEpisode: number) => `/watch/series/${title.tmdbId}?season=${nextSeason}&episode=${nextEpisode}${server ? `&server=${server}` : ""}`
-  useEffect(() => setShowAll(false), [title.tmdbId, seasonNumber])
+  useEffect(() => setShowAll(true), [title.tmdbId, seasonNumber])
   function changeSeason(nextSeason: number) {
     if (watchMode) navigate(episodePath(nextSeason, 1))
     else onSeasonChange?.(nextSeason)
   }
   const visibleEpisodes = season ? (showAll ? season.episodes : season.episodes.slice(0, 10)) : []
-  return <section className={cn("detail-section episodes-section", watchMode && "watch-episodes")} aria-busy={loading}><SectionHeading eyebrow="Series" title="Episodes" count={season ? `${season.episodes.length} episodes` : undefined} /><div className="episode-toolbar"><label className="select-wrap"><span>Season</span><select value={seasonNumber} onChange={(event) => changeSeason(Number(event.target.value))} disabled={loading}>{title.seasons?.map((item) => <option key={item.seasonNumber} value={item.seasonNumber}>{item.name}</option>)}</select><ChevronDown size={14} /></label>{season?.overview && <p>{season.overview}</p>}</div>{loading ? <EpisodeListSkeleton /> : !season ? <div className="episode-loading">Episodes are unavailable right now.</div> : <><div className="episode-list">{visibleEpisodes.map((item) => { const isCurrent = episodeNumber === item.episodeNumber; return <Link className={cn("episode-row", isCurrent && "selected")} key={item.id} to={episodePath(seasonNumber, item.episodeNumber)}><span className="episode-number">{String(item.episodeNumber).padStart(2, "0")}</span>{item.stillPath ? <img className="episode-thumb" loading="lazy" src={tmdbImageUrl(item.stillPath, "w342")} alt="" /> : <div className="episode-thumb episode-thumb-empty"><Play size={14} /></div>}<span className="episode-info"><strong>{item.name}</strong><span>{item.overview}</span>{isCurrent && watchMode && <em className="episode-current">Playing now</em>}</span><span className="episode-runtime">{formatRuntime(item.runtime)}</span><ChevronRight size={17} /></Link> })}</div>{season.episodes.length > 10 && <button className="episodes-toggle" type="button" aria-expanded={showAll} onClick={() => setShowAll((current) => !current)}>{showAll ? "Show fewer episodes" : `View all ${season.episodes.length} episodes`}</button>}</>}</section>
+  return <section className={cn("detail-section episodes-section", watchMode && "watch-episodes")} aria-busy={loading}><SectionHeading eyebrow="Series" title="Episodes" count={season ? `${season.episodes.length} episodes` : undefined} /><div className="episode-toolbar"><form method="get" className="native-filter-form">{watchMode && <input type="hidden" name="episode" value="1" />}<label className="select-wrap"><span>Season</span><select name="season" value={seasonNumber} onChange={(event) => changeSeason(Number(event.target.value))} disabled={loading}>{title.seasons?.map((item) => <option key={item.seasonNumber} value={item.seasonNumber}>{item.name}</option>)}</select><ChevronDown size={14} /></label><Button type="submit" variant="outline">Apply</Button></form>{season?.overview && <p>{season.overview}</p>}</div>{loading ? <EpisodeListSkeleton /> : !season ? <div className="episode-loading">Episodes are unavailable right now.</div> : <><div className="episode-list">{visibleEpisodes.map((item) => { const isCurrent = episodeNumber === item.episodeNumber; return <Link className={cn("episode-row", isCurrent && "selected")} key={item.id} to={episodePath(seasonNumber, item.episodeNumber)}><span className="episode-number">{String(item.episodeNumber).padStart(2, "0")}</span>{item.stillPath ? <img className="episode-thumb" loading="lazy" src={tmdbImageUrl(item.stillPath, "w342")} alt="" /> : <div className="episode-thumb episode-thumb-empty"><Play size={14} /></div>}<span className="episode-info"><strong>{item.name}</strong><span>{item.overview}</span>{isCurrent && watchMode && <em className="episode-current">Playing now</em>}</span><span className="episode-runtime">{formatRuntime(item.runtime)}</span><ChevronRight size={17} /></Link> })}</div>{season.episodes.length > 10 && <button className="episodes-toggle" type="button" disabled={!enhanced} aria-expanded={showAll} onClick={() => setShowAll((current) => !current)}>{showAll ? "Show fewer episodes" : `View all ${season.episodes.length} episodes`}</button>}</>}</section>
 }
 
 function WatchPage({ mediaType }: { mediaType: "movie" | "tv" }) {
+  const serverData = useContext(CatalogDataContext)
+  const enhanced = useContext(EnhancedContext)
   const { tmdbId } = useParams()
   const [params] = useSearchParams()
   const id = Number(tmdbId)
@@ -439,26 +451,27 @@ function WatchPage({ mediaType }: { mediaType: "movie" | "tv" }) {
   const episodeNumber = positiveParam(params.get("episode"), 1)
   const serverParam = params.get("server")
   const server: VideoServer = isVideoServer(serverParam) ? serverParam : "vidlove"
-  const [title, setTitle] = useState<MediaTitle | null>(null)
-  const [season, setSeason] = useState<Season | null>(null)
-  const [seasonLoading, setSeasonLoading] = useState(mediaType === "tv")
+  const [title, setTitle] = useState<MediaTitle | null>(serverData.title ?? null)
+  const [season, setSeason] = useState<Season | null>(serverData.season ?? null)
+  const [seasonLoading, setSeasonLoading] = useState(mediaType === "tv" && !serverData.titleLoaded)
   const [playerLoading, setPlayerLoading] = useState(true)
   const playerLoadId = useRef(0)
   const playerLoadStartedAt = useRef(Date.now())
   const [downloadNotice, setDownloadNotice] = useState("")
   const { addDownload, updateDownload } = useDownloads()
-  useEffect(() => { let live = true; getTitle(mediaType, id).then((result) => { if (live) setTitle(result ?? null) }).catch(() => undefined); return () => { live = false } }, [mediaType, id])
+  useEffect(() => { if (serverData.titleLoaded) return; let live = true; getTitle(mediaType, id).then((result) => { if (live) setTitle(result ?? null) }).catch(() => undefined); return () => { live = false } }, [mediaType, id, serverData.titleLoaded])
   useEffect(() => {
     if (mediaType !== "tv") {
       setSeasonLoading(false)
       return
     }
+    if (serverData.titleLoaded) return
     let live = true
     setSeason(null)
     setSeasonLoading(true)
     getSeason(id, seasonNumber).then((result) => { if (live) setSeason(result ?? null) }).catch(() => undefined).finally(() => { if (live) setSeasonLoading(false) })
     return () => { live = false }
-  }, [id, mediaType, seasonNumber])
+  }, [id, mediaType, seasonNumber, serverData.titleLoaded])
   const currentEpisode = season?.episodes.find((item) => item.episodeNumber === episodeNumber)
   const displayTitle = currentEpisode ? `${title?.title} · ${currentEpisode.name}` : title?.title ?? "MovieLand player"
   const embedUrl = buildVideoEmbedUrl({ server, title: { tmdbId: id, imdbId: title?.imdbId }, mediaType, seasonNumber, episodeNumber })
@@ -502,21 +515,25 @@ function WatchPage({ mediaType }: { mediaType: "movie" | "tv" }) {
   }
 
   const serverLabel = VIDEO_SERVERS.find((option) => option.id === server)?.label ?? "VidLove"
+  if (serverData.titleLoaded && !title) return <NotFound />
   return <div className="watch-page">
-    <div className="player-stage" aria-busy={playerLoading}>
+    <div className="player-stage" aria-busy={enhanced && playerLoading}>
       <div className="player-stage-actions"><Link className="player-stage-action" aria-label="Back to details" to={title ? `/${title.mediaType === "tv" ? "series" : "movie"}/${title.tmdbId}` : "/"}><ArrowLeft size={18} /></Link><Link className="player-stage-action" aria-label="Close player" to="/"><X size={18} /></Link></div>
       <iframe key={embedUrl ?? "empty-player"} title={`${serverLabel} player for ${displayTitle}`} src={embedUrl ?? "about:blank"} allow="fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={handlePlayerLoad} />
-      {playerLoading && <div className="player-loading-overlay"><LoadingIndicator label={`Loading ${serverLabel} player…`} /></div>}
+      {enhanced && playerLoading && <div className="player-loading-overlay"><LoadingIndicator label={`Loading ${serverLabel} player…`} /></div>}
     </div>
     <div className="watch-content">
+      <noscript><p className="download-notice">VidLove playback requires JavaScript. You can still browse titles and episodes here.</p></noscript>
       <div className="watch-identity"><div><p className="watch-identity-kicker">{mediaType === "tv" ? `S${String(seasonNumber).padStart(2, "0")} · E${String(episodeNumber).padStart(2, "0")}` : "Movie"} · {serverLabel}</p><h1>{displayTitle}</h1></div>{title && <Link className="watch-details-link" to={`/${title.mediaType === "tv" ? "series" : "movie"}/${title.tmdbId}`}><Info size={22} /><span className="sr-only">Details</span></Link>}</div>
       {mediaType === "tv" && title && <EpisodeBrowser title={title} season={season} loading={seasonLoading} seasonNumber={seasonNumber} episodeNumber={episodeNumber} server={server} watchMode />}
-      <div className="watch-footer"><div className="watch-status"><span className="watch-status-dot" aria-hidden="true" /><span><strong>{serverLabel} player</strong><small>Playback controls stay inside the provider iframe.</small>{downloadNotice && <small className="watch-feedback" aria-live="polite">{downloadNotice}</small>}</span></div><div className="watch-footer-actions"><Button variant="outline" size="icon" aria-label="Save to downloads" title="Download" onClick={requestDownload} disabled={!embedUrl || !title || preparingDownload} aria-busy={preparingDownload}><DownloadIcon size={22} /></Button><a aria-label="Open video provider" title="Open video provider" className={buttonVariants({ variant: "outline", size: "icon" })} href={embedUrl ?? "https://player.vidlove.cc/"} target="_blank" rel="noreferrer"><ExternalLink size={22} /></a></div></div>
+      <div className="watch-footer"><div className="watch-status"><span className="watch-status-dot" aria-hidden="true" /><span><strong>{serverLabel} player</strong><small>Playback controls stay inside the provider iframe.</small>{downloadNotice && <small className="watch-feedback" aria-live="polite">{downloadNotice}</small>}</span></div><div className="watch-footer-actions"><Button variant="outline" size="icon" aria-label="Save to downloads" title="Download" onClick={requestDownload} disabled={!enhanced || !embedUrl || !title || preparingDownload} aria-busy={preparingDownload}><DownloadIcon size={22} /></Button><a aria-label="Open video provider" title="Open video provider" className={buttonVariants({ variant: "outline", size: "icon" })} href={embedUrl ?? "https://player.vidlove.cc/"} target="_blank" rel="noreferrer"><ExternalLink size={22} /></a></div></div>
     </div>
   </div>
 }
 
 function WatchPartyPage() {
+  const enhanced = useContext(EnhancedContext)
+  if (!enhanced) return <ScriptRequired title="Watchparty" copy="Enable JavaScript to join a room, chat, and synchronize playback." />
   if (!isConvexConfigured) return <WatchPartyUnavailable />
   return <LiveWatchPartyLobby />
 }
@@ -639,6 +656,8 @@ function LiveWatchPartyLobby() {
 
 function WatchPartyRoomPage() {
   const { roomId } = useParams()
+  const enhanced = useContext(EnhancedContext)
+  if (!enhanced) return <ScriptRequired title="Watchparty" copy="Enable JavaScript to join this room and synchronize playback." />
   if (!isConvexConfigured) return <WatchPartyUnavailable />
   if (!roomId) return <div className="mobile-page"><EmptyState title="Room link is incomplete" copy="Ask the host for a new Watchparty link." action={<Link className={buttonVariants({ variant: "outline" })} to="/watchparty">Create or join a room</Link>} /></div>
   return <LiveWatchPartyRoom roomId={roomId as Id<"watchPartyRooms">} />
@@ -867,6 +886,10 @@ function PrivacyPolicyPage() {
 }
 
 function Footer() { return <footer className="mobile-footer"><span>Metadata by <a href="https://www.themoviedb.org/" target="_blank" rel="noreferrer">TMDB</a></span><Link to="/privacy" aria-label="Privacy policy" title="Privacy policy"><Info size={20} /></Link></footer> }
+function ScriptRequired({ title, copy }: { title: string; copy: string }) {
+  return <div className="mobile-page"><h1>{title}</h1><EmptyState title={`${title} unavailable`} copy={copy} action={<Link className={buttonVariants({ variant: "outline" })} to="/">Browse titles</Link>} /></div>
+}
+
 function NotFound() { return <div className="mobile-page"><EmptyState title="Page not found" copy="That title or route is not available." action={<Link className={buttonVariants({ variant: "outline" })} to="/">Back to home</Link>} /></div> }
 
 export default App

@@ -13,6 +13,14 @@ With no `VITE_CONVEX_URL`, the app uses the fixture catalog in `src/lib/fixtures
 
 The web app is server-rendered by the Vite SSR server. Catalog pages load their data before HTML is sent, then React hydrates that HTML in the browser. SSR uses the existing public `VITE_CONVEX_URL`; the optional server-only `CONVEX_URL` overrides it. Fixture data is used when neither is configured. The static `bun run build:static` command is reserved for the Capacitor web bundle.
 
+### Browsing without JavaScript
+
+The SSR web app supports discovery, search, title details, catalog pagination, year filters, season selection, and episode links without client JavaScript. Search and filters submit native GET forms. Watch pages include title and episode information in the initial HTML.
+
+VidLove and YouTube players require JavaScript for playback. My list and download history use browser storage and require JavaScript, as do watchparty chat and playback synchronization. These pages show an explanation and a link back to the catalog when scripts are disabled. The Capacitor static bundle requires JavaScript; serve the website through the SSR server or the configured Vercel function.
+
+Run `bun run test:no-js` to check server-rendered content and native navigation. For a browser check, disable JavaScript before opening the site, then submit a search, open a title, select a season with Apply, and follow an episode link.
+
 ## Connect Convex and TMDB
 
 1. Create or select a Convex deployment and run `bunx convex dev` from this directory.

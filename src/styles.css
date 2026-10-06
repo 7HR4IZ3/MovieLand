@@ -1793,3 +1793,10 @@ select {
 .party-search-form > .ui-button .loading-button-content {
   font-size: 0;
 }
+.native-filter-form, .catalog-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
