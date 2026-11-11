@@ -17,7 +17,7 @@ The web app is server-rendered by the Vite SSR server. Catalog pages load their 
 
 The SSR web app supports discovery, search, title details, catalog pagination, year filters, season selection, and episode links without client JavaScript. Search and filters submit native GET forms. Watch pages include title and episode information in the initial HTML.
 
-VidLove and YouTube players require JavaScript for playback. My list and download history use browser storage and require JavaScript, as do watchparty chat and playback synchronization. These pages show an explanation and a link back to the catalog when scripts are disabled. The Capacitor static bundle requires JavaScript; serve the website through the SSR server or the configured Vercel function.
+The video players and YouTube trailers require JavaScript for playback. My list and download history use browser storage and require JavaScript, as do watchparty chat and playback synchronization. These pages show an explanation and a link back to the catalog when scripts are disabled. The Capacitor static bundle requires JavaScript; serve the website through the SSR server or the configured Vercel function.
 
 Run `bun run test:no-js` to check server-rendered content and native navigation. For a browser check, disable JavaScript before opening the site, then submit a search, open a title, select a season with Apply, and follow an episode link.
 
@@ -61,15 +61,19 @@ xcodebuild -project ios/App/App.xcodeproj -scheme App -sdk iphonesimulator -conf
 
 The MovieLand app icon source lives at `resources/icon.png` and is expanded into the iOS asset catalog with `bunx @capacitor/assets generate --ios`.
 
-The watch route defaults to VidLove's TMDB-ID embed (`https://player.vidlove.cc/embed/...`). VidLove's current embed seek bridge powers MovieLand's rewind/forward overlay buttons; the other cross-origin providers remain provider-controlled. VidLove's own download UI is enabled through its embed option and remains subject to the provider's terms and the content rights for your deployment.
+### Servers
+
+The player has a server picker (the server icon beside the player) with VidLove, VidAPI, CDNM, NontonGo, 111Movies and Videasy. The choice is part of the URL (`?server=`), is remembered on the device as the default for new playback, and is host-controlled inside a Watchparty room. Servers are defined in one table in `src/lib/video.ts`; add a provider there and in the `videoServer` validators in `convex/schema.ts` and `convex/watchParty.ts`.
+
+VidLove is the default (`https://player.vidlove.cc/embed/...`) and is the only server with a documented playback bridge, so Watchparty play/pause is forwarded to the iframe only for VidLove; every server still shares the room state in Convex. VidLove's own download UI is enabled through its embed option and remains subject to the provider's terms and the content rights for your deployment.
 
 ### Downloads
 
-The web app uses Convex for supported file sources and device download history, and Vercel for SSR. The browser or iOS app transfers direct files. VidLove is the only playback provider; its embedded download option remains enabled. A direct-file API from VidLove has not been verified, so MovieLand reports unavailable downloads until a supported file is registered. See [download configuration](docs/DOWNLOADS.md).
+The web app uses Convex for supported file sources and device download history, and Vercel for SSR. The browser or iOS app transfers direct files. VidLove's embedded download option remains enabled. A direct-file API from VidLove has not been verified, so MovieLand reports unavailable downloads until a supported file is registered. See [download configuration](docs/DOWNLOADS.md).
 
 ### Embedded player ads
 
-VidLove controls its cross-origin iframe. MovieLand cannot inspect or rewrite its DOM. Provider-supported controls remain inside the player.
+Every server controls its own cross-origin iframe. MovieLand cannot inspect or rewrite its DOM. Provider-supported controls remain inside the player.
 
 ## Data and attribution
 

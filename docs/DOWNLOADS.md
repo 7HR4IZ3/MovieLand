@@ -1,6 +1,6 @@
 # Downloads on Convex and Vercel
 
-MovieLand uses VidLove for playback. Other video providers are hidden; old provider links and Watchparty records play through VidLove.
+MovieLand plays titles through a server picker: VidLove (default), VidAPI, CDNM, NontonGo, 111Movies and Videasy. The download flow below is independent of the playback server and is built around VidLove.
 
 The frontend is server-rendered on Vercel. Convex stores supported file sources and private device download history. The browser or iOS downloader transfers files directly. There is no Chromium, FFmpeg, download worker, server media relay, or server-side stream capture.
 
@@ -64,4 +64,4 @@ bun run build
 bunx tsc -p convex/tsconfig.json
 ```
 
-The Bun suite uses `convex-test` for real registered query and mutation handlers against a mock database. It covers unavailable sources, ownership, deduplication, source updates/revocation/expiry, Convex Storage, validation, exact episode lookup, deletion, cleanup, bounded history, and VidLove-only playback. It does not prove a live VidLove direct-file API exists.
+The Bun suite uses `convex-test` for real registered query and mutation handlers against a mock database. It covers unavailable sources, ownership, deduplication, source updates/revocation/expiry, Convex Storage, validation, exact episode lookup, deletion, cleanup, bounded history, and per-server playback URLs. It does not prove a live VidLove direct-file API exists.

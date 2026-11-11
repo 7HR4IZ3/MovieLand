@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json && vite build --config vite.config.ts --outDir dist/client && vite build --config vite.config.ts --ssr src/entry-server.tsx --outDir dist/server && vite build --config vite.config.ts --ssr src/lib/catalog-server.ts --outDir dist/server --emptyOutDir false",
     "preview": "NODE_ENV=production bun run server.ts",
     "build:static": "tsc -p tsconfig.app.json && vite build --config vite.config.ts --outDir dist",
-    "lint": "tsc --noEmit",
+    "lint": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p convex/tsconfig.json --noEmit",
     "convex:dev": "convex dev",
     "convex:codegen": "convex codegen",
     "cap:sync": "bun run build:static && cap sync",

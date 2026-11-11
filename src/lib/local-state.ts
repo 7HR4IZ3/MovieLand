@@ -47,6 +47,11 @@ function read<T>(key: string, fallback: T): T {
   try { return JSON.parse(window.localStorage.getItem(key) ?? "null") ?? fallback } catch { return fallback }
 }
 
+// Storage can be full or blocked (private mode, disabled site data). Never let that break the UI.
+function write(key: string, value: unknown) {
+  try { window.localStorage.setItem(key, JSON.stringify(value)) } catch { /* Persistence is best effort. */ }
+}
+
 export function useMyList() {
   const [entries, setEntries] = useState<SavedTitle[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -54,9 +59,9 @@ export function useMyList() {
     setEntries(normalizeSavedTitles(read<SavedTitle[] | number[]>(LIST_KEY, [])))
     setLoaded(true)
   }, [])
-  useEffect(() => { if (loaded) window.localStorage.setItem(LIST_KEY, JSON.stringify(entries)) }, [entries, loaded])
+  useEffect(() => { if (loaded) write(LIST_KEY, entries) }, [entries, loaded])
   const toggle = useCallback((tmdbId: number, mediaType: MediaType) => setEntries((current) => current.some((item) => item.tmdbId === tmdbId && item.mediaType === mediaType) ? current.filter((item) => !(item.tmdbId === tmdbId && item.mediaType === mediaType)) : [...current, { tmdbId, mediaType }]), [])
-  return { entries, list: entries.map((item) => item.tmdbId), toggle, has: (tmdbId: number) => entries.some((item) => item.tmdbId === tmdbId) }
+  return { entries, loaded, list: entries.map((item) => item.tmdbId), toggle, has: (tmdbId: number, mediaType: MediaType) => entries.some((item) => item.tmdbId === tmdbId && item.mediaType === mediaType) }
 }
 
 export function useProgress(tmdbId: number, episodeNumber?: number) {
@@ -66,7 +71,7 @@ export function useProgress(tmdbId: number, episodeNumber?: number) {
     setProgress(value)
     const all = read<Record<string, number>>(PROGRESS_KEY, {})
     all[key] = value
-    window.localStorage.setItem(PROGRESS_KEY, JSON.stringify(all))
+    write(PROGRESS_KEY, all)
   }, [key])
   return { progress, save }
 }
@@ -80,7 +85,7 @@ function normalizeDownload(item: Partial<DownloadItem> & Pick<DownloadItem, "id"
   return {
     ...item,
     status: item.engine === "server" ? "failed" : item.status ?? "queued",
-    ...(item.engine === "server" ? { fileUrl: undefined, error: "This local worker download is no longer available. Use VidLove’s download option, if offered." } : {}),
+    ...(item.engine === "server" ? { fileUrl: undefined, error: "This local worker download is no longer available. Request the file again from the player." } : {}),
     updatedAt: item.updatedAt ?? item.createdAt,
     bytesDownloaded: item.bytesDownloaded ?? 0,
     totalBytes: item.totalBytes ?? 0,
@@ -111,7 +116,7 @@ export function useDownloads() {
   }, [])
 
   useEffect(() => {
-    if (loaded) window.localStorage.setItem(DOWNLOADS_KEY, JSON.stringify(items))
+    if (loaded) write(DOWNLOADS_KEY, items)
   }, [items, loaded])
 
   useEffect(() => {

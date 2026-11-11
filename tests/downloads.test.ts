@@ -161,15 +161,25 @@ describe("Convex direct downloads", () => {
   })
 })
 
-describe("validation and VidLove playback", () => {
-  test("only VidLove is selectable and legacy links use VidLove", () => {
-    expect(VIDEO_SERVERS.map(row => row.id)).toEqual(["vidlove"])
-    expect(isVideoServer("vidapi")).toBe(false)
-    for (const server of ["vidlove", "vidapi", "cdnm", "nontongo", "111movies", "videasy"] as const) {
-      const url = new URL(buildVideoEmbedUrl({ server, title: { tmdbId: 27205 }, mediaType: "movie" })!)
-      expect(url.hostname).toBe("player.vidlove.cc")
-      expect(url.searchParams.get("download")).toBe("true")
+describe("validation and server playback", () => {
+  test("every server builds a player URL and VidLove keeps its download option", () => {
+    expect(VIDEO_SERVERS.map(row => row.id)).toEqual(["vidlove", "vidapi", "cdnm", "nontongo", "111movies", "videasy"])
+    for (const { id } of VIDEO_SERVERS) expect(isVideoServer(id)).toBe(true)
+    expect(isVideoServer("unknown")).toBe(false)
+    expect(isVideoServer(null)).toBe(false)
+    const hosts = { vidlove: "player.vidlove.cc", vidapi: "vidapi.xyz", cdnm: "share.cdnm.ink", nontongo: "www.nontongo.win", "111movies": "111movies.net", videasy: "player.videasy.net" } as const
+    for (const server of VIDEO_SERVERS.map(row => row.id)) {
+      const movie = new URL(buildVideoEmbedUrl({ server, title: { tmdbId: 27205, imdbId: "tt1375666" }, mediaType: "movie" })!)
+      expect(movie.hostname).toBe(hosts[server])
+      const episode = buildVideoEmbedUrl({ server, title: { tmdbId: 94605 }, mediaType: "tv", seasonNumber: 2, episodeNumber: 3 })!
+      expect(episode).toContain(server === "cdnm" ? "season=2&episode=3" : "/2/3")
+      expect(buildVideoEmbedUrl({ server, title: { tmdbId: 94605 }, mediaType: "tv", seasonNumber: 0, episodeNumber: 1 })).toBeUndefined()
     }
+    const vidlove = new URL(buildVideoEmbedUrl({ server: "vidlove", title: { tmdbId: 27205 }, mediaType: "movie" })!)
+    expect(vidlove.pathname).toBe("/embed/movie/27205")
+    expect(vidlove.searchParams.get("download")).toBe("true")
+    expect(buildVideoEmbedUrl({ server: "videasy", title: { tmdbId: 27205, imdbId: "tt1375666" }, mediaType: "movie" })).toBe("https://player.videasy.net/movie/27205")
+    expect(buildVideoEmbedUrl({ server: "vidapi", title: { tmdbId: 27205, imdbId: "1375666" }, mediaType: "movie" })).toBe("https://vidapi.xyz/embed/movie/tt1375666")
   })
 
   test("invalid TV selections produce no iframe", () => {

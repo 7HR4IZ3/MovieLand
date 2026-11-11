@@ -80,6 +80,15 @@ test("all episodes remain accessible without a click handler", () => {
   expect(html).toContain("episode=11")
 })
 
+test("the server picker renders every server as a plain link", () => {
+  const html = render("/watch/movie/27205?server=videasy", { title: getFixtureTitle("movie", 27205), titleLoaded: true })
+  for (const label of ["VidLove", "VidAPI", "CDNM", "NontonGo", "111Movies", "Videasy"]) expect(html).toContain(label)
+  expect(html).toContain('href="/watch/movie/27205?server=vidapi"')
+  expect(html).toContain('aria-label="Server: Videasy"')
+  // Without scripts the player is not mounted, so no provider page is requested.
+  expect(html).not.toContain("<iframe")
+})
+
 test("unknown titles and browser-only pages have useful fallback content", async () => {
   const data = await load(new URL("http://localhost/movie/0"))
   expect(render("/movie/0", data)).toContain("Page not found")
