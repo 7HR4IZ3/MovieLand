@@ -1,14 +1,14 @@
 import { useContext, useEffect, useState } from "react"
 import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ArrowLeftIcon, HeartIcon, InfoIcon, PlayIcon, StarIcon, UsersIcon, XIcon } from "@phosphor-icons/react"
-import { EpisodeBrowser } from "../components/episodes"
+import { EpisodeBrowser, watchEpisodePath } from "../components/episodes"
 import { Poster, PosterCard, SafeImage } from "../components/media"
 import { InlineError, NotFound, Spinner } from "../components/states"
 import { Button, buttonVariants } from "../components/ui/button"
 import { Skeleton } from "../components/ui/skeleton"
 import { CatalogDataContext, EnhancedContext } from "../lib/app-context"
 import { getSeason, getTitle } from "../lib/catalog"
-import { useMyList } from "../lib/local-state"
+import { useMyList, useWatched } from "../lib/local-state"
 import type { MediaTitle, Season } from "../lib/types"
 import { cn, formatRuntime, formatYear, positiveParam, tmdbImageUrl } from "../lib/utils"
 
@@ -22,7 +22,8 @@ export function DetailPage({ mediaType }: { mediaType: "movie" | "tv" }) {
   const [missing, setMissing] = useState(Boolean(serverData.titleLoaded && !serverData.title))
 
   useEffect(() => {
-    if (serverData.title?.tmdbId === id && attempt === 0) return
+    // Already have this title (from the server render or a previous load): do not blank the page.
+    if ((title?.tmdbId === id || serverData.title?.tmdbId === id) && attempt === 0) return
     if (serverData.titleLoaded && !serverData.title && attempt === 0) return
     let live = true
     setTitle(null)
@@ -30,6 +31,8 @@ export function DetailPage({ mediaType }: { mediaType: "movie" | "tv" }) {
     setMissing(false)
     getTitle(mediaType, id).then((result) => { if (!live) return; setTitle(result ?? null); setMissing(!result) }).catch(() => { if (live) setFailed(true) })
     return () => { live = false }
+  // `title` is read to avoid refetching, not watched.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaType, id, serverData.title, serverData.titleLoaded, attempt])
 
   if (failed) return <div className="page"><InlineError onRetry={() => setAttempt((value) => value + 1)} /></div>
@@ -43,14 +46,15 @@ function DetailContent({ title }: { title: MediaTitle }) {
   const enhanced = useContext(EnhancedContext)
   const [params] = useSearchParams()
   const { toggle, has } = useMyList()
-  const firstSeason = positiveParam(params.get("season"), title.seasons?.[0]?.seasonNumber ?? 1)
-  const [seasonNumber, setSeasonNumber] = useState(firstSeason)
+  const { seen, last } = useWatched(title.tmdbId)
+  // The season lives in the URL, so the chips are plain links that also work without scripts.
+  const seasonNumber = positiveParam(params.get("season"), title.seasons?.[0]?.seasonNumber ?? 1)
   const [season, setSeason] = useState<Season | null>(serverData.season?.tmdbId === title.tmdbId ? serverData.season : null)
   const [seasonLoading, setSeasonLoading] = useState(title.mediaType === "tv" && !serverData.titleLoaded)
 
   useEffect(() => {
     if (title.mediaType !== "tv") { setSeasonLoading(false); return }
-    if (serverData.titleLoaded && seasonNumber === firstSeason && serverData.season?.tmdbId === title.tmdbId && serverData.season.seasonNumber === seasonNumber) {
+    if (serverData.titleLoaded && serverData.season?.tmdbId === title.tmdbId && serverData.season.seasonNumber === seasonNumber) {
       setSeason(serverData.season)
       setSeasonLoading(false)
       return
@@ -60,12 +64,15 @@ function DetailContent({ title }: { title: MediaTitle }) {
     setSeasonLoading(true)
     getSeason(title.tmdbId, seasonNumber).then((result) => { if (live) setSeason(result ?? null) }).catch(() => undefined).finally(() => { if (live) setSeasonLoading(false) })
     return () => { live = false }
-  }, [title.tmdbId, title.mediaType, seasonNumber, serverData.titleLoaded, serverData.season, firstSeason])
+  }, [title.tmdbId, title.mediaType, seasonNumber, serverData.titleLoaded, serverData.season])
 
   const saved = has(title.tmdbId, title.mediaType)
   const firstEpisode = season?.episodes[0]?.episodeNumber ?? 1
   const backdrop = tmdbImageUrl(title.backdropPath, "w780")
-  const playPath = title.mediaType === "tv" ? `/watch/series/${title.tmdbId}?season=${seasonNumber}&episode=${firstEpisode}` : `/watch/movie/${title.tmdbId}`
+  // Resume where this device left off; otherwise start the season being browsed.
+  const playPath = title.mediaType === "tv"
+    ? last ? watchEpisodePath(title.tmdbId, last.seasonNumber, last.episodeNumber) : watchEpisodePath(title.tmdbId, seasonNumber, firstEpisode)
+    : `/watch/movie/${title.tmdbId}`
 
   return <div className="page-flush detail">
     <section className="detail-hero">
@@ -91,7 +98,7 @@ function DetailContent({ title }: { title: MediaTitle }) {
         <div className="about-panel">{title.genres.length > 0 && <div className="chips">{title.genres.map((genre) => <span key={genre}>{genre}</span>)}</div>}{title.overview && <p>{title.overview}</p>}</div>
       </details>}
 
-      {title.mediaType === "tv" && <EpisodeBrowser title={title} season={season} loading={seasonLoading} seasonNumber={seasonNumber} episodeNumber={firstEpisode} onSeasonChange={setSeasonNumber} />}
+      {title.mediaType === "tv" && <EpisodeBrowser title={title} season={season} loading={seasonLoading} seasonNumber={seasonNumber} seen={seen} />}
       <Trailers title={title} />
       <Cast title={title} />
       {title.images?.length ? <section className="strip" aria-label="Images"><div className="strip-track">{title.images.slice(0, 10).map((image) => <SafeImage className="still" loading="lazy" key={image.filePath} src={tmdbImageUrl(image.filePath, "w500")} />)}</div></section> : null}

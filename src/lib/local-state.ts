@@ -64,6 +64,35 @@ export function useMyList() {
   return { entries, loaded, list: entries.map((item) => item.tmdbId), toggle, has: (tmdbId: number, mediaType: MediaType) => entries.some((item) => item.tmdbId === tmdbId && item.mediaType === mediaType) }
 }
 
+const WATCHED_KEY = "movieland:watched"
+const MAX_SERIES = 200
+const MAX_SEEN = 600
+
+type WatchedRecord = { last: string; seen: string[] }
+export const episodeKey = (seasonNumber: number, episodeNumber: number) => `${seasonNumber}:${episodeNumber}`
+
+/** Episodes opened per series, plus the most recent one, kept on this device. */
+export function useWatched(tmdbId: number) {
+  const [record, setRecord] = useState<WatchedRecord | null>(null)
+  useEffect(() => { setRecord(read<Record<string, WatchedRecord>>(WATCHED_KEY, {})[String(tmdbId)] ?? null) }, [tmdbId])
+  const mark = useCallback((seasonNumber: number, episodeNumber: number) => {
+    const all = read<Record<string, WatchedRecord>>(WATCHED_KEY, {})
+    const key = episodeKey(seasonNumber, episodeNumber)
+    const current = all[String(tmdbId)] ?? { last: key, seen: [] }
+    const next: WatchedRecord = { last: key, seen: current.seen.includes(key) ? current.seen : [...current.seen, key].slice(-MAX_SEEN) }
+    // Re-insert so the most recently watched series sorts last, then trim the oldest.
+    delete all[String(tmdbId)]
+    all[String(tmdbId)] = next
+    for (const stale of Object.keys(all).slice(0, Math.max(0, Object.keys(all).length - MAX_SERIES))) delete all[stale]
+    write(WATCHED_KEY, all)
+    setRecord(next)
+  }, [tmdbId])
+  const seen = new Set(record?.seen ?? [])
+  const [season, episode] = (record?.last ?? "").split(":").map(Number)
+  const last = record && Number.isInteger(season) && Number.isInteger(episode) ? { seasonNumber: season, episodeNumber: episode } : null
+  return { seen, last, mark }
+}
+
 export function useProgress(tmdbId: number, episodeNumber?: number) {
   const key = `${tmdbId}:${episodeNumber ?? 0}`
   const [progress, setProgress] = useState<number>(() => read<Record<string, number>>(PROGRESS_KEY, {})[key] ?? 0)
