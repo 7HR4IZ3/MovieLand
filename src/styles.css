@@ -28,6 +28,7 @@
 html { background: var(--bg); -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
+  overflow-x: clip; /* a stray wide child must never make the page itself pan sideways */
   min-width: 320px;
   background: var(--bg);
   color: var(--text);
@@ -196,7 +197,8 @@ summary.btn::-webkit-details-marker { display: none; }
 .grid .card { width: auto; }
 .grid .sk-poster { width: auto; }
 
-.rails { display: grid; gap: 28px; padding-top: 8px; }
+.rails { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; padding-top: 8px; }
+.rail, .strip { min-width: 0; }
 .rail-head { display: flex; align-items: center; justify-content: space-between; padding: 0 var(--gutter); margin-bottom: 6px; }
 .rail-head h2 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .rail-actions { display: flex; align-items: center; gap: 2px; }
@@ -204,7 +206,7 @@ summary.btn::-webkit-details-marker { display: none; }
 @media (hover: hover) and (pointer: fine) { .rail-nav { display: inline-flex; } }
 .rail-track, .strip-track {
   display: flex; gap: 12px; overflow-x: auto; padding: 4px var(--gutter) 10px;
-  scroll-snap-type: x proximity; scrollbar-width: none; overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity; scrollbar-width: none; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
 }
 .rail-track::-webkit-scrollbar, .strip-track::-webkit-scrollbar { display: none; }
 
@@ -241,7 +243,7 @@ summary.btn::-webkit-details-marker { display: none; }
 }
 .detail-copy { min-width: 0; padding-bottom: 4px; }
 .detail-copy h1 { font-size: clamp(24px, 5vw, 50px); }
-.detail-body { display: grid; gap: 28px; max-width: 1100px; padding: 4px var(--gutter) 8px; }
+.detail-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; max-width: 1100px; padding: 4px var(--gutter) 8px; }
 .detail-body .rail-track, .detail-body .strip-track { margin-inline: calc(var(--gutter) * -1); }
 .about summary { display: inline-flex; }
 .about[open] summary { background: rgba(255, 255, 255, 0.18); }
@@ -264,8 +266,8 @@ summary.btn::-webkit-details-marker { display: none; }
 .person-empty img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 
 /* ───────────── Episodes ───────────── */
-.episodes { display: grid; gap: 14px; }
-.episode-list { display: grid; gap: 6px; }
+.episodes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.episode-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 .episode {
   display: flex; align-items: center; gap: 12px; padding: 8px 14px 8px 8px; border-radius: 14px;
   background: var(--surface); color: var(--muted); transition: background-color 0.15s;
@@ -334,7 +336,7 @@ summary.btn::-webkit-details-marker { display: none; }
 .picker-option.selected .swatch { box-shadow: 0 0 0 2px var(--surface-2), 0 0 0 4px var(--hue); }
 
 /* ───────────── Watchparty ───────────── */
-.party { display: grid; gap: 14px; }
+.party { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .picks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .pick { position: relative; padding: 0; aspect-ratio: 2 / 3; overflow: hidden; border: 0; border-radius: 12px; background: var(--surface-2); outline-offset: 2px; }
 .pick.selected { outline: 2px solid var(--accent); }
@@ -371,7 +373,7 @@ summary.btn::-webkit-details-marker { display: none; }
 .dl-status { flex: none; color: var(--muted); }
 .dl-status.good, .dl-main small.good { color: var(--good); }
 .dl-status.bad, .dl-main small.bad { color: var(--bad); }
-.dl-main { display: grid; flex: 1; gap: 6px; min-width: 0; }
+.dl-main { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; gap: 6px; min-width: 0; }
 .dl-main strong { overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .dl-main strong span { color: var(--muted); font-weight: 400; }
 .dl-main small { color: var(--muted); font-size: 12px; }
@@ -379,7 +381,7 @@ summary.btn::-webkit-details-marker { display: none; }
 .progress span { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }
 
 /* ───────────── Legal ───────────── */
-.legal { display: grid; gap: 14px; max-width: 720px; }
+.legal { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; max-width: 720px; }
 .legal h1 { font-size: clamp(28px, 5vw, 40px); font-weight: 800; letter-spacing: -0.03em; }
 .legal h2 { margin-top: 18px; font-size: 17px; font-weight: 600; }
 .legal p, .legal li { color: #c3c3cb; line-height: 1.7; }
